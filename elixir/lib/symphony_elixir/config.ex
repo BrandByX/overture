@@ -116,6 +116,8 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_semantics(settings) do
+    normalized_tracker_assignee = normalize_tracker_assignee(settings.tracker.assignee)
+
     cond do
       is_nil(settings.tracker.kind) ->
         {:error, :missing_tracker_kind}
@@ -141,10 +143,10 @@ defmodule SymphonyElixir.Config do
       settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.status_field_name) ->
         {:error, {:invalid_workflow_config, "tracker.status_field_name must be set for github_projects"}}
 
-      settings.tracker.kind == "github_projects" and is_binary(settings.tracker.assignee) and String.trim(settings.tracker.assignee) == "" ->
+      settings.tracker.kind == "github_projects" and normalized_tracker_assignee == "" ->
         {:error, {:invalid_workflow_config, "tracker.assignee must be an explicit GitHub login for github_projects"}}
 
-      settings.tracker.kind == "github_projects" and settings.tracker.assignee == "me" ->
+      settings.tracker.kind == "github_projects" and normalized_tracker_assignee == "me" ->
         {:error, {:invalid_workflow_config, "tracker.assignee: me is not supported for github_projects; use an explicit GitHub login"}}
 
       true ->
@@ -163,6 +165,14 @@ defmodule SymphonyElixir.Config do
   defp github_projects_client_module do
     Application.get_env(:symphony_elixir, :github_projects_client_module, GitHubProjectsClient)
   end
+
+  defp normalize_tracker_assignee(assignee) when is_binary(assignee) do
+    assignee
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp normalize_tracker_assignee(_assignee), do: nil
 
   defp format_config_error(reason) do
     case reason do
