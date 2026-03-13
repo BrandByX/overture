@@ -4,10 +4,11 @@ defmodule SymphonyElixir.Config do
   """
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.GitHubProjects.Client, as: GitHubProjectsClient
   alias SymphonyElixir.Workflow
 
   @default_prompt_template """
-  You are working on a Linear issue.
+  You are working on a tracked issue.
 
   Identifier: {{ issue.identifier }}
   Title: {{ issue.title }}
@@ -119,18 +120,45 @@ defmodule SymphonyElixir.Config do
       is_nil(settings.tracker.kind) ->
         {:error, :missing_tracker_kind}
 
-      settings.tracker.kind not in ["linear", "memory"] ->
+      settings.tracker.kind not in ["github_projects", "memory"] ->
         {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_linear_api_token}
+      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.api_key) ->
+        {:error, :missing_github_api_token}
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
-        {:error, :missing_linear_project_slug}
+      settings.tracker.kind == "github_projects" and settings.tracker.owner_type not in ["organization", "user"] ->
+        {:error, :invalid_github_owner_type}
+
+      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.owner_login) ->
+        {:error, {:invalid_workflow_config, "tracker.owner_login must be set for github_projects"}}
+
+      settings.tracker.kind == "github_projects" and not is_integer(settings.tracker.project_number) ->
+        {:error, {:invalid_workflow_config, "tracker.project_number must be an integer for github_projects"}}
+
+      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.repository) ->
+        {:error, :invalid_github_repository}
+
+      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.status_field_name) ->
+        {:error, {:invalid_workflow_config, "tracker.status_field_name must be set for github_projects"}}
+
+      settings.tracker.kind == "github_projects" and settings.tracker.assignee == "me" ->
+        {:error, {:invalid_workflow_config, "tracker.assignee: me is not supported for github_projects; use an explicit GitHub login"}}
 
       true ->
-        :ok
+        validate_tracker_backend(settings)
     end
+  end
+
+  defp validate_tracker_backend(%{tracker: %{kind: "memory"}}), do: :ok
+
+  defp validate_tracker_backend(%{tracker: %{kind: "github_projects"} = tracker}) do
+    github_projects_client_module().validate_tracker_config(tracker)
+  end
+
+  defp validate_tracker_backend(_settings), do: :ok
+
+  defp github_projects_client_module do
+    Application.get_env(:symphony_elixir, :github_projects_client_module, GitHubProjectsClient)
   end
 
   defp format_config_error(reason) do

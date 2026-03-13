@@ -40,7 +40,8 @@ defmodule SymphonyElixir.Tracker do
   def adapter do
     case Config.settings!().tracker.kind do
       "memory" -> SymphonyElixir.Tracker.Memory
-      _ -> SymphonyElixir.Linear.Adapter
+      "github_projects" -> SymphonyElixir.GitHubProjects.Adapter
+      _ -> SymphonyElixir.GitHubProjects.Adapter
     end
   end
 end

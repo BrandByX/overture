@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, Linear.Issue}
+  alias SymphonyElixir.{Config, Tracker.Issue}
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
@@ -106,7 +106,7 @@ defmodule SymphonyElixir.Linear.Client do
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
     tracker = Config.settings!().tracker
-    project_slug = tracker.project_slug
+    project_slug = Map.get(tracker, :project_slug)
 
     cond do
       is_nil(tracker.api_key) ->
@@ -130,7 +130,7 @@ defmodule SymphonyElixir.Linear.Client do
       {:ok, []}
     else
       tracker = Config.settings!().tracker
-      project_slug = tracker.project_slug
+      project_slug = Map.get(tracker, :project_slug)
 
       cond do
         is_nil(tracker.api_key) ->
@@ -450,14 +450,18 @@ defmodule SymphonyElixir.Linear.Client do
 
     %Issue{
       id: issue["id"],
+      content_id: nil,
+      content_number: nil,
       identifier: issue["identifier"],
       title: issue["title"],
       description: issue["description"],
       priority: parse_priority(issue["priority"]),
       state: get_in(issue, ["state", "name"]),
+      content_state: nil,
+      content_state_reason: nil,
       branch_name: issue["branchName"],
       url: issue["url"],
-      assignee_id: assignee_field(assignee, "id"),
+      assignee_logins: assignee_logins(assignee),
       blocked_by: extract_blockers(issue),
       labels: extract_labels(issue),
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
@@ -470,6 +474,15 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp assignee_field(%{} = assignee, field) when is_binary(field), do: assignee[field]
   defp assignee_field(_assignee, _field), do: nil
+
+  defp assignee_logins(%{} = assignee) do
+    case assignee_field(assignee, "id") do
+      value when is_binary(value) -> [value]
+      _ -> []
+    end
+  end
+
+  defp assignee_logins(_assignee), do: []
 
   defp assigned_to_worker?(_assignee, nil), do: true
 

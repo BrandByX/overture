@@ -351,7 +351,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert issue.labels == ["backend"]
     assert issue.priority == 2
     assert issue.state == "Todo"
-    assert issue.assignee_id == "user-1"
+    assert issue.assignee_logins == ["user-1"]
     assert issue.assigned_to_worker
   end
 
@@ -552,7 +552,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       identifier: "MT-1003",
       title: "Ready work",
       state: "Todo",
-      blocked_by: [%{id: "blocker-2", identifier: "MT-1004", state: "Closed"}]
+      blocked_by: [%{id: "blocker-2", identifier: "MT-1004", state: "Done"}]
     }
 
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
@@ -720,9 +720,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "config reads defaults for optional settings" do
-    previous_linear_api_key = System.get_env("LINEAR_API_KEY")
-    on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
-    System.delete_env("LINEAR_API_KEY")
+    previous_github_token = System.get_env("GITHUB_TOKEN")
+    on_exit(fn -> restore_env("GITHUB_TOKEN", previous_github_token) end)
+    System.delete_env("GITHUB_TOKEN")
 
     write_workflow_file!(Workflow.workflow_file_path(),
       workspace_root: nil,
@@ -734,13 +734,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       codex_read_timeout_ms: nil,
       codex_stall_timeout_ms: nil,
       tracker_api_token: nil,
-      tracker_project_slug: nil
+      tracker_owner_login: nil,
+      tracker_project_number: nil,
+      tracker_repository: nil,
+      tracker_status_field_name: nil
     )
 
     config = Config.settings!()
-    assert config.tracker.endpoint == "https://api.linear.app/graphql"
     assert config.tracker.api_key == nil
-    assert config.tracker.project_slug == nil
+    assert config.tracker.owner_login == nil
+    assert config.tracker.project_number == nil
+    assert config.tracker.repository == nil
+    assert config.tracker.status_field_name == "Status"
     assert config.workspace.root == Path.join(System.tmp_dir!(), "symphony_workspaces")
     assert config.worker.max_concurrent_agents_per_host == nil
     assert config.agent.max_concurrent_agents == 10
@@ -885,7 +890,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "config resolves $VAR references for env-backed secret and path values" do
     workspace_env_var = "SYMP_WORKSPACE_ROOT_#{System.unique_integer([:positive])}"
-    api_key_env_var = "SYMP_LINEAR_API_KEY_#{System.unique_integer([:positive])}"
+    api_key_env_var = "SYMP_GITHUB_TOKEN_#{System.unique_integer([:positive])}"
     workspace_root = Path.join("/tmp", "symphony-workspace-root")
     api_key = "resolved-secret"
     codex_bin = Path.join(["~", "bin", "codex"])
@@ -915,7 +920,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "config no longer resolves legacy env: references" do
     workspace_env_var = "SYMP_WORKSPACE_ROOT_#{System.unique_integer([:positive])}"
-    api_key_env_var = "SYMP_LINEAR_API_KEY_#{System.unique_integer([:positive])}"
+    api_key_env_var = "SYMP_GITHUB_TOKEN_#{System.unique_integer([:positive])}"
     workspace_root = Path.join("/tmp", "symphony-workspace-root")
     api_key = "resolved-secret"
 
@@ -1008,18 +1013,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     previous_missing_workspace_env = System.get_env(missing_workspace_env)
     previous_empty_secret_env = System.get_env(empty_secret_env)
     previous_missing_secret_env = System.get_env(missing_secret_env)
-    previous_linear_api_key = System.get_env("LINEAR_API_KEY")
+    previous_github_token = System.get_env("GITHUB_TOKEN")
 
     System.delete_env(missing_workspace_env)
     System.put_env(empty_secret_env, "")
     System.delete_env(missing_secret_env)
-    System.put_env("LINEAR_API_KEY", "fallback-linear-token")
+    System.put_env("GITHUB_TOKEN", "fallback-github-token")
 
     on_exit(fn ->
       restore_env(missing_workspace_env, previous_missing_workspace_env)
       restore_env(empty_secret_env, previous_empty_secret_env)
       restore_env(missing_secret_env, previous_missing_secret_env)
-      restore_env("LINEAR_API_KEY", previous_linear_api_key)
+      restore_env("GITHUB_TOKEN", previous_github_token)
     end)
 
     assert {:ok, settings} =
@@ -1042,7 +1047,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
                workspace: %{root: ""}
              })
 
-    assert settings.tracker.api_key == "fallback-linear-token"
+    assert settings.tracker.api_key == "fallback-github-token"
     assert settings.workspace.root == Path.join(System.tmp_dir!(), "symphony_workspaces")
   end
 
