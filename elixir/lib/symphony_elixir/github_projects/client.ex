@@ -413,6 +413,9 @@ defmodule SymphonyElixir.GitHubProjects.Client do
          {:ok, %{status: 200, body: body}} <- request_fun.(payload, headers) do
       {:ok, body}
     else
+      {:error, :missing_github_api_token} ->
+        {:error, :missing_github_api_token}
+
       {:ok, response} ->
         Logger.error(
           "GitHub Projects GraphQL request failed status=#{response.status}" <>
