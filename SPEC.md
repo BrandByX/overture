@@ -1,12 +1,15 @@
-# Symphony Service Specification
+# Overture Service Specification
 
 Status: Draft v1 (language-agnostic)
 
-Purpose: Define a service that orchestrates coding agents to get project work done.
+Purpose: Define Overture, BrandByX's fork of Symphony for autonomous work orchestration.
+
+Note: This baseline specification is inherited from Symphony. In this version, the normative
+tracker language remains Linear-oriented until the GitHub Projects migration tickets land.
 
 ## 1. Problem Statement
 
-Symphony is a long-running automation service that continuously reads work from an issue tracker
+Overture is a long-running automation service that continuously reads work from an issue tracker
 (Linear in this specification version), creates an isolated workspace for each issue, and runs a
 coding agent session for that issue inside the workspace.
 
@@ -26,7 +29,7 @@ require stricter approvals or sandboxing.
 
 Important boundary:
 
-- Symphony is a scheduler/runner and tracker reader.
+- Overture is a scheduler/runner and tracker reader.
 - Ticket writes (state transitions, comments, PR links) are typically performed by the coding agent
   using tools available in the workflow/runtime environment.
 - A successful run may end at a workflow-defined handoff state (for example `Human Review`), not
