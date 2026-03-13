@@ -22,6 +22,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "type" => ["object", "null"],
         "description" => "Optional GraphQL variables object.",
         "additionalProperties" => true
+      },
+      "operationName" => %{
+        "type" => ["string", "null"],
+        "description" => "Optional GraphQL operation name for multi-operation documents."
       }
     }
   }
@@ -64,8 +68,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     github_client = Keyword.get(opts, :github_client, &Client.graphql/3)
     client_opts = Keyword.take(opts, [:tracker, :request_fun, :operation_name])
 
-    with {:ok, query, variables} <- normalize_graphql_arguments(arguments),
-         {:ok, response} <- github_client.(query, variables, client_opts) do
+    with {:ok, query, variables, operation_name} <- normalize_graphql_arguments(arguments),
+         {:ok, response} <- github_client.(query, variables, put_operation_name(client_opts, operation_name)) do
       graphql_response(response)
     else
       {:error, reason} ->
@@ -75,14 +79,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   # Normalize dynamic tool arguments into a GraphQL query and variables map.
   #
-  # Accepts either a raw query string or a map with `query` and optional
-  # `variables`, ignoring any legacy `operationName` entry in the payload.
+  # Accepts either a raw query string or a map with `query`, optional
+  # `variables`, and optional `operationName`.
   #
-  # Returns `{:ok, query, variables}` or `{:error, reason}`.
+  # Returns `{:ok, query, variables, operation_name}` or `{:error, reason}`.
   defp normalize_graphql_arguments(arguments) when is_binary(arguments) do
     case String.trim(arguments) do
       "" -> {:error, :missing_query}
-      query -> {:ok, query, %{}}
+      query -> {:ok, query, %{}, nil}
     end
   end
 
@@ -91,7 +95,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       {:ok, query} ->
         case normalize_variables(arguments) do
           {:ok, variables} ->
-            {:ok, query, variables}
+            case normalize_operation_name(arguments) do
+              {:ok, operation_name} ->
+                {:ok, query, variables, operation_name}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -123,6 +133,25 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       _ -> {:error, :invalid_variables}
     end
   end
+
+  defp normalize_operation_name(arguments) do
+    case Map.get(arguments, "operationName") || Map.get(arguments, :operationName) do
+      nil ->
+        {:ok, nil}
+
+      operation_name when is_binary(operation_name) ->
+        case String.trim(operation_name) do
+          "" -> {:ok, nil}
+          trimmed -> {:ok, trimmed}
+        end
+
+      _ ->
+        {:error, :invalid_operation_name}
+    end
+  end
+
+  defp put_operation_name(client_opts, nil), do: client_opts
+  defp put_operation_name(client_opts, operation_name), do: Keyword.put(client_opts, :operation_name, operation_name)
 
   defp graphql_response(response) do
     success =
@@ -178,6 +207,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "message" => "`github_graphql.variables` must be a JSON object when provided."
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_operation_name) do
+    %{
+      "error" => %{
+        "message" => "`github_graphql.operationName` must be a string when provided."
       }
     }
   end

@@ -10,6 +10,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                "description" => description,
                "inputSchema" => %{
                  "properties" => %{
+                   "operationName" => _,
                    "query" => _,
                    "variables" => _
                  },
@@ -83,20 +84,25 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert response["success"] == true
   end
 
-  test "github_graphql ignores legacy operationName arguments" do
+  test "github_graphql forwards operationName arguments to the GitHub client" do
     test_pid = self()
 
     response =
       DynamicTool.execute(
         "github_graphql",
-        %{"query" => "query Viewer { viewer { login } }", "operationName" => "Viewer"},
+        %{
+          "query" => "query Viewer { viewer { login } }\nquery Repositories { viewer { repositories(first: 5) { nodes { name } } } }",
+          "operationName" => "Viewer"
+        },
         github_client: fn query, variables, opts ->
           send(test_pid, {:github_client_called, query, variables, opts})
           {:ok, %{"data" => %{"viewer" => %{"login" => "sid"}}}}
         end
       )
 
-    assert_received {:github_client_called, "query Viewer { viewer { login } }", %{}, []}
+    assert_received {:github_client_called, query, %{}, opts}
+    assert query =~ "query Viewer"
+    assert Keyword.get(opts, :operation_name) == "Viewer"
     assert response["success"] == true
   end
 
@@ -230,6 +236,25 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert Jason.decode!(response["output"]) == %{
              "error" => %{
                "message" => "`github_graphql.variables` must be a JSON object when provided."
+             }
+           }
+  end
+
+  test "github_graphql rejects invalid operation names" do
+    response =
+      DynamicTool.execute(
+        "github_graphql",
+        %{"query" => "query Viewer { viewer { login } }", "operationName" => 123},
+        github_client: fn _query, _variables, _opts ->
+          flunk("github client should not be called when operationName is invalid")
+        end
+      )
+
+    assert response["success"] == false
+
+    assert Jason.decode!(response["output"]) == %{
+             "error" => %{
+               "message" => "`github_graphql.operationName` must be a string when provided."
              }
            }
   end
