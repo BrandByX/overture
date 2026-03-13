@@ -18,40 +18,52 @@ conservative in v1.
 
 - Public-facing repo and docs use the Overture name.
 - Internal runtime identifiers remain `SymphonyElixir`, `:symphony_elixir`, and `./bin/symphony`.
-- The current Elixir implementation still reflects the upstream Linear-oriented baseline while the
-  GitHub Projects migration is underway.
+- The current Elixir implementation uses GitHub Projects as its real tracker contract while
+  preserving upstream internal module/runtime naming.
 
 ## How it works
 
-1. Polls Linear for candidate work in the current baseline
+1. Polls a configured GitHub Projects v2 board for issue-backed work items in active states
 2. Creates a workspace per issue
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
-During app-server sessions, Overture also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
+During app-server sessions, Overture also serves a client-side `github_graphql` tool so that repo
+skills can make raw GitHub GraphQL calls using the same configured tracker auth as the poller.
 
-If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
+If a claimed project item moves to a terminal state (`Done`, `Cancelled`, or `Duplicate`),
 Overture stops the active agent for that issue and cleans up matching workspaces.
+
+Important v1 tracker semantics:
+
+- Runnable tracker inputs are issue-backed project items only.
+- PR-linked project items, draft items, archived items, redacted items, and wrong-repo items are
+  skipped by the poller.
+- The project `Status` field is the workflow source of truth.
+- `tracker.assignee` must be an explicit GitHub login when used.
+- `tracker.assignee: me` is intentionally unsupported in v1.
 
 ## How to use it
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
-2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
-   set it as the `LINEAR_API_KEY` environment variable.
+2. Create a GitHub token with repository issue and project access, and make it available through
+   `GITHUB_TOKEN` or an explicit `tracker.api_key` value in your workflow.
 3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
-   - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
-     operations such as comment editing or upload flows.
+4. Optionally copy the `commit`, `push`, `pull`, and `land` skills to your repo.
+   - Overture's tracker-native raw access now comes from the `github_graphql` app-server tool.
+   - Do not treat any legacy tracker-specific skill from the upstream baseline as part of the
+     supported Overture workflow.
 5. Customize the copied `WORKFLOW.md` file for your project.
-   - To get your project's slug, right-click the project and copy its URL. The slug is part of the
-     URL.
-   - When creating a workflow based on this repo, note that it depends on non-standard Linear
-     issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
-     Team Settings → Workflow in Linear.
+   - Set `tracker.owner_type`, `tracker.owner_login`, `tracker.project_number`, and
+     `tracker.repository` to the board/repo you want Overture to manage.
+   - Ensure `tracker.status_field_name` points to a GitHub Projects single-select field, usually
+     `Status`.
+   - Make the configured `active_states` and `terminal_states` match the options present on that
+     field.
+   - If you want assignee-based routing, set `tracker.assignee` to an explicit GitHub login.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Prerequisites
@@ -98,8 +110,12 @@ Minimal example:
 ```md
 ---
 tracker:
-  kind: linear
-  project_slug: "..."
+  kind: github_projects
+  owner_type: organization
+  owner_login: "your-org"
+  project_number: 1
+  repository: "your-org/your-repo"
+  status_field_name: "Status"
 workspace:
   root: ~/code/workspaces
 hooks:
@@ -112,7 +128,7 @@ codex:
   command: codex app-server
 ---
 
-You are working on a Linear issue {{ issue.identifier }}.
+You are working on a tracked issue {{ issue.identifier }}.
 
 Title: {{ issue.title }} Body: {{ issue.description }}
 ```
@@ -126,18 +142,20 @@ Notes:
   - `codex.turn_sandbox_policy` defaults to a `workspaceWrite` policy rooted at the current issue workspace
 - Supported `codex.approval_policy` values depend on the targeted Codex app-server version. In the current local Codex schema, string values include `untrusted`, `on-failure`, `on-request`, and `never`, and object-form `reject` is also supported.
 - Supported `codex.thread_sandbox` values: `read-only`, `workspace-write`, `danger-full-access`.
-- When `codex.turn_sandbox_policy` is set explicitly, Symphony passes the map through to Codex
+- When `codex.turn_sandbox_policy` is set explicitly, Overture passes the map through to Codex
   unchanged. Compatibility then depends on the targeted Codex app-server version rather than local
-  Symphony validation.
-- `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
+  Overture validation.
+- `agent.max_turns` caps how many back-to-back Codex turns Overture will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
-- If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
+- If the Markdown body is blank, Overture uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
-- `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- `tracker.api_key` reads from `GITHUB_TOKEN` when unset or when value is `$GITHUB_TOKEN`.
+- `tracker.status_field_name` must resolve to a `ProjectV2SingleSelectField`.
+- `tracker.assignee: me` is rejected in v1; use an explicit GitHub login instead.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
@@ -145,7 +163,7 @@ Notes:
 
 ```yaml
 tracker:
-  api_key: $LINEAR_API_KEY
+  api_key: $GITHUB_TOKEN
 workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:
@@ -183,35 +201,14 @@ The observability UI now runs on a minimal Phoenix stack:
 make all
 ```
 
-Run the real external end-to-end test only when you want Overture to create disposable Linear
-resources and launch a real `codex app-server` session:
+The supported quality gate today is `make all`.
 
-```bash
-cd elixir
-export LINEAR_API_KEY=...
-make e2e
-```
+GitHub Projects live smoke coverage is planned as a dedicated follow-up and is not yet the
+documented default validation path in this directory. Until that lands, prefer:
 
-Optional environment variables:
-
-- `SYMPHONY_LIVE_LINEAR_TEAM_KEY` defaults to `SYME2E`
-- `SYMPHONY_LIVE_SSH_WORKER_HOSTS` uses those SSH hosts when set, as a comma-separated list
-
-`make e2e` runs two live scenarios:
-- one with a local worker
-- one with SSH workers
-
-If `SYMPHONY_LIVE_SSH_WORKER_HOSTS` is unset, the SSH scenario uses `docker compose` to start two
-disposable SSH workers on `localhost:<port>`. The live test generates a temporary SSH keypair,
-mounts the host `~/.codex/auth.json` into each worker, verifies that Overture can talk to them
-over real SSH, then runs the same orchestration flow against those worker addresses. This keeps
-the transport representative without depending on long-lived external machines.
-
-Set `SYMPHONY_LIVE_SSH_WORKER_HOSTS` if you want `make e2e` to target real SSH hosts instead.
-
-The live test creates a temporary Linear project and issue, writes a temporary `WORKFLOW.md`, runs
-a real agent turn, verifies the workspace side effect, requires Codex to comment on and close the
-Linear issue, then marks the project completed so the run remains visible in Linear.
+- `make all` for the main implementation gate
+- targeted ExUnit coverage for tracker/runtime changes
+- manual sandbox-board validation when you need end-to-end confidence against a real project
 
 ## FAQ
 

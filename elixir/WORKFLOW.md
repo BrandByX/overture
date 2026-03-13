@@ -76,6 +76,14 @@ Work only in the provided repository copy. Do not touch any other path.
 
 The agent should be able to talk to the configured tracker. If the required tracker access is unavailable, stop and ask the user to configure it.
 
+## Tracker input model
+
+- Overture only dispatches issue-backed GitHub Projects items from the configured repository.
+- PR-linked project items, draft items, archived items, redacted items, and wrong-repo items are
+  non-runnable and should be ignored by the poller.
+- If `tracker.assignee` is configured, it must be an explicit GitHub login. `tracker.assignee: me`
+  is unsupported in v1.
+
 ## Default posture
 
 - Start by determining the ticket's current status, then follow the matching flow for that status.
@@ -98,11 +106,11 @@ The agent should be able to talk to the configured tracker. If the required trac
 
 ## Related skills
 
-- `linear`: interact with Linear.
 - `commit`: produce clean, logical commits during implementation.
 - `push`: keep remote branch current and publish updates.
 - `pull`: keep branch updated with latest `origin/main` before handoff.
 - `land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/land/SKILL.md`, which includes the `land` loop.
+- Tracker-native raw access is available through the `github_graphql` app-server tool when needed.
 
 ## Status map
 
@@ -154,7 +162,7 @@ The agent should be able to talk to the configured tracker. If the required trac
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
     - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
-    - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
+    - Do not include metadata already inferable from tracker issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).

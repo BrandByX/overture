@@ -1,16 +1,17 @@
 # Overture GitHub Projects Migration
 
 Created: 2026-03-12
+Updated: 2026-03-13
 
 ## Goal
 
-Replace the current Linear-oriented Symphony baseline with a GitHub Projects-only Overture runtime
-that can poll, execute, update, and validate issue-backed project items.
+Replace the remaining Linear-oriented surfaces with a fully coherent GitHub Projects-only Overture
+runtime that can poll, execute, update, and validate issue-backed project items.
 
 ## Current state
 
 - The repo is publicly branded as Overture
-- The current Elixir runtime remains Linear-oriented
+- The current Elixir runtime uses GitHub Projects-backed tracker semantics
 - GitHub Projects boards are already created and configured operationally
 - Live board IDs, field IDs, and option IDs are captured in `docs/references/github-projects-board-metadata.md`
 - The migration work is tracked on the Overture Delivery board
