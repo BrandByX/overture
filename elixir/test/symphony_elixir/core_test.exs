@@ -264,7 +264,7 @@ defmodule SymphonyElixir.CoreTest do
     GenServer.stop(pid)
   end
 
-  test "linear issue state reconciliation fetch with no running issues is a no-op" do
+  test "github projects issue state reconciliation fetch with no running issues is a no-op" do
     assert {:ok, []} = Client.fetch_issue_states_by_ids([])
   end
 

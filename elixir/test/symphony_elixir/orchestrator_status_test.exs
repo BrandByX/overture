@@ -1507,7 +1507,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         "method" => "codex/event/agent_reasoning",
         "params" => %{
           "msg" => %{
-            "payload" => %{"summaryText" => "compare retry paths for Linear polling"}
+            "payload" => %{"summaryText" => "compare retry paths for GitHub Projects polling"}
           }
         }
       }
@@ -1534,7 +1534,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     assert StatusDashboard.humanize_codex_message(reasoning_message) =~
-             "reasoning update: compare retry paths for Linear polling"
+             "reasoning update: compare retry paths for GitHub Projects polling"
 
     assert StatusDashboard.humanize_codex_message(message_delta) =~
              "agent message streaming: writing workpad reconciliation update"
