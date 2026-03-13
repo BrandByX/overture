@@ -12,6 +12,7 @@ that can poll, execute, update, and validate issue-backed project items.
 - The repo is publicly branded as Overture
 - The current Elixir runtime remains Linear-oriented
 - GitHub Projects boards are already created and configured operationally
+- Live board IDs, field IDs, and option IDs are captured in `docs/references/github-projects-board-metadata.md`
 - The migration work is tracked on the Overture Delivery board
 
 ## Target state
