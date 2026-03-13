@@ -1,8 +1,8 @@
 # Overture Elixir
 
 This directory contains the Elixir agent orchestration service currently shipped in Overture. In
-this baseline, it still polls Linear, creates per-issue workspaces, and runs Codex in app-server
-mode.
+the current baseline, it polls GitHub Projects issue-backed items, creates per-issue workspaces,
+and runs Codex in app-server mode.
 
 ## Environment
 

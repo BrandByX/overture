@@ -1,14 +1,14 @@
 # Overture
 
-Overture is BrandByX's GitHub Projects-focused fork of Symphony. It turns project work into
-isolated, autonomous implementation runs while the fork is being migrated from the upstream
-Linear-oriented baseline.
+Overture is BrandByX's GitHub Projects-focused fork of Symphony. It turns issue-backed GitHub
+Projects work into isolated, autonomous implementation runs using repo-owned workflows and
+per-issue workspaces.
 
 [![Overture demo video preview](.github/media/symphony-demo-poster.jpg)](.github/media/symphony-demo.mp4)
 
 _This [demo video](.github/media/symphony-demo.mp4) shows the upstream Symphony orchestration model
-that Overture starts from. The current fork is being adapted from that baseline toward GitHub
-Projects-backed work execution._
+that Overture starts from. The current fork applies that model to GitHub Projects-backed work
+execution._
 
 > [!WARNING]
 > Overture is a low-key engineering preview fork for testing in trusted environments.
@@ -39,14 +39,18 @@ help with the setup:
 
 ## v1 baseline
 
-Overture currently ships the upstream Symphony Elixir implementation as its starting point.
+Overture currently ships a GitHub Projects-backed Elixir implementation derived from the upstream
+Symphony codebase.
 
 - Public-facing repo and documentation identity now use `Overture`.
 - Internal runtime identifiers such as `SymphonyElixir`, `:symphony_elixir`, and `./bin/symphony`
   remain unchanged in v1.
+- GitHub Projects is the real production tracker contract in v1.
+- Runnable tracker inputs are issue-backed project items only.
+- PR-linked project items, draft items, and other non-issue project items are skipped by the
+  runtime.
 - The `upstream` remote should remain configured so future upstream changes can be reviewed and
   cherry-picked selectively.
-- The GitHub Projects tracker migration is planned work, not completed baseline behavior.
 
 ## Repo docs
 

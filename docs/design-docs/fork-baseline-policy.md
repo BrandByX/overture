@@ -1,11 +1,12 @@
 # Fork Baseline Policy
 
 Created: 2026-03-12
+Updated: 2026-03-13
 
 ## Purpose
 
-Capture the durable policy decisions that define the Overture fork baseline before the GitHub
-Projects migration is implemented in runtime code.
+Capture the durable policy decisions that define the Overture fork baseline after the GitHub
+Projects runtime cutover.
 
 ## Public vs internal naming
 
@@ -33,5 +34,8 @@ Full internal package and module renaming is intentionally out of scope for v1.
 
 ## Runtime baseline policy
 
-- The current shipped Elixir runtime remains Linear-oriented in this baseline.
-- GitHub Projects support is planned work and should not be implied as already implemented.
+- The current shipped Elixir runtime uses GitHub Projects for real tracker work.
+- Public docs and workflow samples must describe issue-backed project items as the only runnable
+  tracker inputs in v1.
+- PR-linked project items, draft items, archived items, and redacted items are non-runnable and
+  should be described that way consistently.

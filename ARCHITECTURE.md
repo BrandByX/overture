@@ -1,25 +1,29 @@
 # Overture Architecture
 
 Created: 2026-03-12
+Updated: 2026-03-13
 
 ## Purpose
 
-Describe the current Overture baseline and the target architecture for the GitHub Projects fork.
+Describe the current Overture baseline and the remaining target architecture work for the GitHub
+Projects fork.
 
 ## Current baseline
 
-Overture currently ships the upstream Symphony Elixir implementation with limited repo-level fork
-changes.
+Overture currently ships a GitHub Projects-backed Elixir runtime derived from the upstream
+Symphony implementation.
 
 Current baseline facts:
 
 - Public-facing repo identity is `Overture`
 - Current implementation lives under `elixir/`
 - Internal runtime identifiers remain unchanged in v1
-- The shipped sample workflow in `elixir/WORKFLOW.md` is still Linear-oriented
-- The runtime currently assumes Linear tracker semantics, tracker auth, and issue model
-- GitHub Projects setup exists operationally in GitHub, but it is not yet implemented in runtime
-  code
+- The shipped sample workflow in `elixir/WORKFLOW.md` is GitHub Projects-oriented
+- The runtime assumes GitHub Projects tracker semantics, shared tracker auth, and the generic
+  issue model
+- GitHub Projects setup exists operationally in GitHub and is implemented in runtime code
+- Remaining migration work is concentrated in public docs parity, test migration, and live smoke
+  coverage
 
 ## Target architecture
 
@@ -43,8 +47,8 @@ The migration is intentionally staged.
 
 1. Establish the fork identity and repo-level harness
 2. Define the new tracker/config/model contract
-3. Replace Linear polling and mutations with GitHub Projects equivalents
-4. Replace dynamic tracker tooling and public docs
+3. Replace tracker polling and mutations with GitHub Projects equivalents
+4. Replace tracker tooling and public docs
 5. Rewrite tests and add live smoke coverage
 
 ## Key design constraints

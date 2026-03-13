@@ -1,10 +1,12 @@
 # Overture Baseline
 
 Created: 2026-03-12
+Updated: 2026-03-13
 
 ## Purpose
 
-Document the initial Overture fork posture before the GitHub Projects tracker migration lands.
+Document the initial Overture fork posture after the public rename and GitHub Projects runtime
+cutover.
 
 ## v1 naming policy
 
@@ -20,8 +22,9 @@ Full internal package and module renaming is intentionally out of scope for v1.
 ## Current behavior baseline
 
 - The repository starts from the upstream Symphony codebase.
-- The shipped Elixir runtime remains Linear-oriented in this baseline.
-- GitHub Projects support is planned follow-on work and is not yet implemented here.
+- The shipped Elixir runtime now uses GitHub Projects as its production tracker contract.
+- Runnable tracker inputs are issue-backed project items only.
+- PR-linked project items, draft items, archived items, and redacted items are non-runnable in v1.
 
 ## Upstream sync strategy
 
@@ -31,8 +34,8 @@ Full internal package and module renaming is intentionally out of scope for v1.
 
 ## Related work
 
-The GitHub Projects migration and broader Overture runtime changes are tracked in the repository
-issue backlog rather than being folded into this baseline rename pass.
+Remaining GitHub Projects migration work is now focused on docs parity, test migration, and live
+smoke coverage rather than on the core tracker cutover itself.
 
 Canonical planning and design docs now live in:
 
