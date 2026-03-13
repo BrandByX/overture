@@ -3,7 +3,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   alias Ecto.Changeset
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.{Codex, StringOrMap}
-  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.GitHubProjects.Client
 
   test "workspace bootstrap can be implemented in after_create hook" do
     test_root =
@@ -295,7 +295,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert :ok = Workspace.remove_issue_workspaces(nil)
   end
 
-  test "linear issue helpers" do
+  test "issue helpers expose normalized labels and routing state" do
     issue = %Issue{
       id: "abc",
       labels: ["frontend", "infra"],
@@ -307,135 +307,105 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute issue.assigned_to_worker
   end
 
-  test "linear client normalizes blockers from inverse relations" do
-    raw_issue = %{
-      "id" => "issue-1",
-      "identifier" => "MT-1",
-      "title" => "Blocked todo",
-      "description" => "Needs dependency",
-      "priority" => 2,
-      "state" => %{"name" => "Todo"},
-      "branchName" => "mt-1",
-      "url" => "https://example.org/issues/MT-1",
-      "assignee" => %{
-        "id" => "user-1"
-      },
-      "labels" => %{"nodes" => [%{"name" => "Backend"}]},
-      "inverseRelations" => %{
-        "nodes" => [
-          %{
-            "type" => "blocks",
-            "issue" => %{
-              "id" => "issue-2",
-              "identifier" => "MT-2",
-              "state" => %{"name" => "In Progress"}
-            }
-          },
-          %{
-            "type" => "relatesTo",
-            "issue" => %{
-              "id" => "issue-3",
-              "identifier" => "MT-3",
-              "state" => %{"name" => "Done"}
-            }
-          }
-        ]
-      },
-      "createdAt" => "2026-01-01T00:00:00Z",
-      "updatedAt" => "2026-01-02T00:00:00Z"
-    }
+  test "github projects client normalizes linked issue metadata for explicit assignee routing" do
+    tracker = %{Config.settings!().tracker | assignee: "user-1"}
 
-    issue = Client.normalize_issue_for_test(raw_issue, "user-1")
+    request_fun = fn payload, _headers ->
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: github_project_contract_response()}}
 
-    assert issue.blocked_by == [%{id: "issue-2", identifier: "MT-2", state: "In Progress"}]
+        "OvertureProjectItems" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               github_project_items_response([
+                 github_issue_item(
+                   "project-item-1",
+                   "Todo",
+                   github_issue_node("issue-node-1", 101,
+                     assignees: ["user-1"],
+                     labels: ["Backend"],
+                     state: "CLOSED",
+                     state_reason: "DUPLICATE"
+                   )
+                 )
+               ])
+           }}
+
+        "OvertureReopenIssue" ->
+          {:ok, %{status: 200, body: github_reopen_issue_response("issue-node-1")}}
+      end
+    end
+
+    assert {:ok, [%Issue{} = issue]} = Client.fetch_candidate_issues_for_test(tracker, request_fun)
+
+    assert issue.id == "project-item-1"
+    assert issue.identifier == "BrandByX/overture#101"
     assert issue.labels == ["backend"]
-    assert issue.priority == 2
-    assert issue.state == "Todo"
     assert issue.assignee_logins == ["user-1"]
     assert issue.assigned_to_worker
+    assert issue.content_state == "OPEN"
+    assert is_nil(issue.content_state_reason)
+    assert issue.blocked_by == []
   end
 
-  test "linear client marks explicitly unassigned issues as not routed to worker" do
-    raw_issue = %{
-      "id" => "issue-99",
-      "identifier" => "MT-99",
-      "title" => "Someone else's task",
-      "state" => %{"name" => "Todo"},
-      "assignee" => %{
-        "id" => "user-2"
-      }
-    }
-
-    issue = Client.normalize_issue_for_test(raw_issue, "user-1")
-
-    refute issue.assigned_to_worker
-  end
-
-  test "linear client pagination merge helper preserves issue ordering" do
-    issue_page_1 = [
-      %Issue{id: "issue-1", identifier: "MT-1"},
-      %Issue{id: "issue-2", identifier: "MT-2"}
-    ]
-
-    issue_page_2 = [
-      %Issue{id: "issue-3", identifier: "MT-3"}
-    ]
-
-    merged = Client.merge_issue_pages_for_test([issue_page_1, issue_page_2])
-
-    assert Enum.map(merged, & &1.identifier) == ["MT-1", "MT-2", "MT-3"]
-  end
-
-  test "linear client paginates issue state fetches by id beyond one page" do
-    issue_ids = Enum.map(1..55, &"issue-#{&1}")
+  test "github projects client paginates issue state fetches by project item id beyond one page" do
+    tracker = Config.settings!().tracker
+    issue_ids = Enum.map(1..55, &"project-item-#{&1}")
     first_batch_ids = Enum.take(issue_ids, 50)
     second_batch_ids = Enum.drop(issue_ids, 50)
 
-    raw_issue = fn issue_id ->
-      suffix = String.replace_prefix(issue_id, "issue-", "")
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
 
-      %{
-        "id" => issue_id,
-        "identifier" => "MT-#{suffix}",
-        "title" => "Issue #{suffix}",
-        "description" => "Description #{suffix}",
-        "state" => %{"name" => "In Progress"},
-        "labels" => %{"nodes" => []},
-        "inverseRelations" => %{"nodes" => []}
-      }
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: github_project_contract_response()}}
+
+        "OvertureProjectItemsById" ->
+          nodes =
+            Enum.map(payload["variables"][:ids], fn project_item_id ->
+              issue_number =
+                project_item_id
+                |> String.replace_prefix("project-item-", "")
+                |> String.to_integer()
+
+              github_issue_item(
+                project_item_id,
+                "In Progress",
+                github_issue_node("issue-node-#{issue_number}", issue_number, assignees: [])
+              )
+            end)
+
+          {:ok, %{status: 200, body: github_project_item_batch_response(nodes)}}
+      end
     end
 
-    graphql_fun = fn query, variables ->
-      send(self(), {:fetch_issue_states_page, query, variables})
-
-      body = %{
-        "data" => %{
-          "issues" => %{
-            "nodes" => Enum.map(variables.ids, raw_issue)
-          }
-        }
-      }
-
-      {:ok, body}
-    end
-
-    assert {:ok, issues} = Client.fetch_issue_states_by_ids_for_test(issue_ids, graphql_fun)
+    assert {:ok, issues} = Client.fetch_issue_states_by_ids_for_test(tracker, issue_ids, request_fun)
 
     assert Enum.map(issues, & &1.id) == issue_ids
 
-    assert_receive {:fetch_issue_states_page, query, %{ids: ^first_batch_ids, first: 50, relationFirst: 50}}
-    assert query =~ "SymphonyLinearIssuesById"
+    assert_receive {:github_request, "OvertureProjectItemsById", first_payload}
+    assert first_payload["variables"][:ids] == first_batch_ids
+    assert first_payload["variables"][:statusFieldName] == "Status"
 
-    assert_receive {:fetch_issue_states_page, ^query, %{ids: ^second_batch_ids, first: 5, relationFirst: 50}}
+    assert_receive {:github_request, "OvertureProjectItemsById", second_payload}
+    assert second_payload["variables"][:ids] == second_batch_ids
+    assert second_payload["variables"][:statusFieldName] == "Status"
   end
 
-  test "linear client logs response bodies for non-200 graphql responses" do
+  test "github projects client logs response bodies for non-200 graphql responses" do
+    tracker = Config.settings!().tracker
+
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:error, {:linear_api_status, 400}} =
+        assert {:error, {:github_api_status, 400}} =
                  Client.graphql(
                    "query Viewer { viewer { id } }",
                    %{},
+                   tracker: tracker,
                    request_fun: fn _payload, _headers ->
                      {:ok,
                       %{
@@ -453,8 +423,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
                  )
       end)
 
-    assert log =~ "Linear GraphQL request failed status=400"
-    assert log =~ ~s(body=%{"errors" => [%{"extensions" => %{"code" => "BAD_USER_INPUT"})
+    assert log =~ "GitHub Projects GraphQL request failed status=400"
+    assert log =~ ~s(response=%{"errors" => [%{"extensions" => %{"code" => "BAD_USER_INPUT"})
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
@@ -1085,6 +1055,142 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              "excludeTmpdirEnvVar" => false,
              "excludeSlashTmp" => false
            }
+  end
+
+  # Build the fake project contract used by GitHub Projects client tests.
+  #
+  # Mirrors the status field shape expected by the runtime without requiring a
+  # network call.
+  #
+  # Returns a successful GraphQL response map.
+  defp github_project_contract_response do
+    %{
+      "data" => %{
+        "organization" => %{
+          "projectV2" => %{
+            "id" => "project-node-1",
+            "fields" => %{
+              "nodes" => [
+                %{
+                  "__typename" => "ProjectV2SingleSelectField",
+                  "id" => "status-field-1",
+                  "name" => "Status",
+                  "options" => [
+                    %{"id" => "option-backlog", "name" => "Backlog"},
+                    %{"id" => "option-todo", "name" => "Todo"},
+                    %{"id" => "option-in-progress", "name" => "In Progress"},
+                    %{"id" => "option-human-review", "name" => "Human Review"},
+                    %{"id" => "option-rework", "name" => "Rework"},
+                    %{"id" => "option-merging", "name" => "Merging"},
+                    %{"id" => "option-done", "name" => "Done"},
+                    %{"id" => "option-cancelled", "name" => "Cancelled"},
+                    %{"id" => "option-duplicate", "name" => "Duplicate"}
+                  ]
+                }
+              ],
+              "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+            }
+          }
+        },
+        "user" => nil
+      }
+    }
+  end
+
+  # Build a fake project-items GraphQL payload for GitHub Projects tests.
+  #
+  # Accepts normalized project item nodes and wraps them in the same response
+  # envelope returned by the GitHub client.
+  #
+  # Returns a successful GraphQL response map.
+  defp github_project_items_response(nodes) when is_list(nodes) do
+    %{
+      "data" => %{
+        "node" => %{
+          "items" => %{
+            "nodes" => nodes,
+            "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+          }
+        }
+      }
+    }
+  end
+
+  # Build a fake project-item batch GraphQL payload for GitHub Projects tests.
+  #
+  # Accepts normalized project item nodes and wraps them in the `nodes(ids: ...)`
+  # response shape used by issue-state refreshes.
+  #
+  # Returns a successful GraphQL response map.
+  defp github_project_item_batch_response(nodes) when is_list(nodes) do
+    %{"data" => %{"nodes" => nodes}}
+  end
+
+  # Build a fake GitHub Projects issue-backed project item.
+  #
+  # Accepts a project item id, a workflow state name, and a linked issue node.
+  # Uses a single-select status field shape that matches the runtime contract.
+  #
+  # Returns a project item response map.
+  defp github_issue_item(project_item_id, state_name, issue)
+       when is_binary(project_item_id) and is_binary(state_name) and is_map(issue) do
+    %{
+      "__typename" => "ProjectV2Item",
+      "id" => project_item_id,
+      "isArchived" => false,
+      "fieldValueByName" => %{
+        "__typename" => "ProjectV2ItemFieldSingleSelectValue",
+        "name" => state_name,
+        "optionId" => "option-#{state_name |> String.downcase() |> String.replace(" ", "-")}"
+      },
+      "content" => issue
+    }
+  end
+
+  # Build a fake linked GitHub issue node for tracker normalization tests.
+  #
+  # Accepts a GitHub issue node id, issue number, and optional attrs for
+  # assignees, labels, and state fields.
+  #
+  # Returns an issue content response map.
+  defp github_issue_node(issue_id, issue_number, attrs)
+       when is_binary(issue_id) and is_integer(issue_number) and is_list(attrs) do
+    assignees = Keyword.get(attrs, :assignees, [])
+    labels = Keyword.get(attrs, :labels, [])
+    state = Keyword.get(attrs, :state, "OPEN")
+    state_reason = Keyword.get(attrs, :state_reason)
+
+    %{
+      "__typename" => "Issue",
+      "id" => issue_id,
+      "number" => issue_number,
+      "title" => "Issue #{issue_number}",
+      "body" => "Body #{issue_number}",
+      "url" => "https://github.com/BrandByX/overture/issues/#{issue_number}",
+      "state" => state,
+      "stateReason" => state_reason,
+      "repository" => %{"nameWithOwner" => "BrandByX/overture"},
+      "assignees" => %{"nodes" => Enum.map(assignees, &%{"login" => &1})},
+      "labels" => %{"nodes" => Enum.map(labels, &%{"name" => &1})},
+      "createdAt" => "2026-03-13T16:00:00Z",
+      "updatedAt" => "2026-03-13T17:00:00Z"
+    }
+  end
+
+  # Build a fake reopen-issue GraphQL payload for GitHub Projects tests.
+  #
+  # Accepts a linked GitHub issue node id and returns the successful
+  # `reopenIssue` response shape used during active-state reconciliation.
+  #
+  # Returns a successful GraphQL response map.
+  defp github_reopen_issue_response(issue_id) when is_binary(issue_id) do
+    %{
+      "data" => %{
+        "reopenIssue" => %{
+          "issue" => %{"id" => issue_id, "state" => "OPEN", "stateReason" => nil}
+        }
+      }
+    }
   end
 
   test "schema keeps workspace roots raw while sandbox helpers expand only for local use" do
