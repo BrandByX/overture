@@ -161,16 +161,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert SymphonyElixir.Tracker.adapter() == Adapter
   end
 
-  test "github projects adapter is a deliberate placeholder in ticket #3" do
-    issue = %Issue{id: "project-item-1", content_id: "issue-node-1", identifier: "BrandByX/overture#1"}
-
-    assert {:error, :github_projects_not_implemented} = Adapter.fetch_candidate_issues()
-    assert {:error, :github_projects_not_implemented} = Adapter.fetch_issues_by_states(["Todo"])
-    assert {:error, :github_projects_not_implemented} = Adapter.fetch_issue_states_by_ids(["issue-1"])
-    assert {:error, :github_projects_not_implemented} = Adapter.create_comment(issue, "hello")
-    assert {:error, :github_projects_not_implemented} = Adapter.update_issue_state(issue, "Done")
-  end
-
   test "phoenix observability api preserves state, issue, and refresh responses" do
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
