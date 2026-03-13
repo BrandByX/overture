@@ -1,66 +1,75 @@
 defmodule SymphonyElixir.GitHubProjects.Adapter do
   @moduledoc """
-  GitHub Projects-backed tracker adapter placeholder for the migration path.
+  Delegate tracker reads and writes to the GitHub Projects client.
 
-  Ticket `#3` establishes the runtime config and issue model contract. Full
-  polling and mutation behavior lands in the subsequent adapter implementation
-  ticket.
+  Keeps the tracker boundary thin while the GitHub Projects client owns the
+  polling, normalization, and mutation details.
 
-  Returns `{:error, :github_projects_not_implemented}` for runtime operations.
+  Returns tracker read results or tracker write results from the client.
   """
 
   @behaviour SymphonyElixir.Tracker
 
+  alias SymphonyElixir.GitHubProjects.Client
   alias SymphonyElixir.Tracker.Issue
 
   @doc """
-  Return the placeholder fetch response for candidate issues.
+  Fetch active issue-backed project items for dispatch.
 
-  Ticket `#3` establishes the runtime contract only; candidate polling lands in
-  the subsequent adapter implementation ticket.
+  Delegates to the GitHub Projects client.
 
-  Returns `{:error, :github_projects_not_implemented}`.
+  Returns `{:ok, issues}` or `{:error, reason}`.
   """
-  @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
-  def fetch_candidate_issues, do: {:error, :github_projects_not_implemented}
+  @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_candidate_issues do
+    Client.fetch_candidate_issues()
+  end
 
   @doc """
-  Return the placeholder fetch response for state-scoped issues.
+  Fetch issue-backed project items for the requested board states.
 
-  Ticket `#3` does not implement GitHub Projects polling yet.
+  Delegates to the GitHub Projects client.
 
-  Returns `{:error, :github_projects_not_implemented}`.
+  Returns `{:ok, issues}` or `{:error, reason}`.
   """
-  @spec fetch_issues_by_states([String.t()]) :: {:ok, [term()]} | {:error, term()}
-  def fetch_issues_by_states(_states), do: {:error, :github_projects_not_implemented}
+  @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_states(states) do
+    Client.fetch_issues_by_states(states)
+  end
 
   @doc """
-  Return the placeholder fetch response for issue state refresh.
+  Refresh issue-backed project items by canonical project item ID.
 
-  Ticket `#3` does not implement GitHub Projects state refresh yet.
+  Delegates to the GitHub Projects client.
 
-  Returns `{:error, :github_projects_not_implemented}`.
+  Returns `{:ok, issues}` or `{:error, reason}`.
   """
-  @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
-  def fetch_issue_states_by_ids(_issue_ids), do: {:error, :github_projects_not_implemented}
+  @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issue_states_by_ids(issue_ids) do
+    Client.fetch_issue_states_by_ids(issue_ids)
+  end
 
   @doc """
-  Return the placeholder mutation response for tracker comments.
+  Create a comment on the linked GitHub issue for a tracker item.
 
-  Ticket `#3` does not implement GitHub Projects mutations yet.
+  Delegates to the GitHub Projects client.
 
-  Returns `{:error, :github_projects_not_implemented}`.
+  Returns `:ok` or `{:error, reason}`.
   """
   @spec create_comment(Issue.t(), String.t()) :: :ok | {:error, term()}
-  def create_comment(%Issue{}, _body), do: {:error, :github_projects_not_implemented}
+  def create_comment(%Issue{} = issue, body) do
+    Client.create_comment(issue, body)
+  end
 
   @doc """
-  Return the placeholder mutation response for tracker state updates.
+  Update the project status for a tracker item and reconcile the linked issue.
 
-  Ticket `#3` does not implement GitHub Projects mutations yet.
+  Delegates to the GitHub Projects client.
 
-  Returns `{:error, :github_projects_not_implemented}`.
+  Returns `:ok` or `{:error, reason}`.
   """
   @spec update_issue_state(Issue.t(), String.t()) :: :ok | {:error, term()}
-  def update_issue_state(%Issue{}, _state_name), do: {:error, :github_projects_not_implemented}
+  def update_issue_state(%Issue{} = issue, state_name) do
+    Client.update_issue_state(issue, state_name)
+  end
 end
