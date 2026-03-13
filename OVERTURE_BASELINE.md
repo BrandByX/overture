@@ -33,3 +33,9 @@ Full internal package and module renaming is intentionally out of scope for v1.
 
 The GitHub Projects migration and broader Overture runtime changes are tracked in the repository
 issue backlog rather than being folded into this baseline rename pass.
+
+Canonical planning and design docs now live in:
+
+- `AGENTS.md`
+- `ARCHITECTURE.md`
+- `docs/README.md`
