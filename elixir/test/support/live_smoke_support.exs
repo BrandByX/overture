@@ -33,7 +33,6 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     $projectNumber: Int!,
     $repositoryName: String!,
     $fieldFirst: Int!,
-    $itemFirst: Int!,
     $pullRequestFirst: Int!
   ) {
     organization(login: $ownerLogin) {
@@ -54,11 +53,35 @@ defmodule SymphonyElixir.LiveSmokeSupport do
             }
           }
         }
-        items(first: $itemFirst) {
+      }
+    }
+    repository(owner: $ownerLogin, name: $repositoryName) {
+      id
+      pullRequests(first: $pullRequestFirst, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes {
+          id
+          number
+          url
+          state
+        }
+      }
+    }
+  }
+  """
+  @project_items_query """
+  query OvertureLiveSmokeProjectItems(
+    $projectId: ID!,
+    $statusFieldName: String!,
+    $itemFirst: Int!,
+    $after: String
+  ) {
+    node(id: $projectId) {
+      ... on ProjectV2 {
+        items(first: $itemFirst, after: $after) {
           nodes {
             id
             isArchived
-            fieldValueByName(name: "Status") {
+            fieldValueByName(name: $statusFieldName) {
               __typename
               ... on ProjectV2ItemFieldSingleSelectValue {
                 name
@@ -83,17 +106,10 @@ defmodule SymphonyElixir.LiveSmokeSupport do
               }
             }
           }
-        }
-      }
-    }
-    repository(owner: $ownerLogin, name: $repositoryName) {
-      id
-      pullRequests(first: $pullRequestFirst, orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes {
-          id
-          number
-          url
-          state
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }
@@ -461,7 +477,6 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       projectNumber: @project_number,
       repositoryName: @repository_name,
       fieldFirst: @field_page_size,
-      itemFirst: @item_page_size,
       pullRequestFirst: @pull_request_page_size
     }
 
@@ -472,13 +487,14 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     repository = get_in(response, ["data", "repository"]) || %{}
     status_field = project_status_field!(project)
     repository_pull_requests = get_in(repository, ["pullRequests", "nodes"]) |> List.wrap()
+    project_items = fetch_project_items!(tracker, project["id"])
 
     %{
       project_id: project["id"],
       repository_id: repository["id"],
       status_field: status_field,
-      project_issue_items: project_issue_items(project),
-      project_pull_request_items: project_pull_request_items(project),
+      project_issue_items: project_issue_items(project_items),
+      project_pull_request_items: project_pull_request_items(project_items),
       repository_pull_requests: repository_pull_requests
     }
   end
@@ -491,12 +507,67 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   #
   # Returns `:ok`.
   defp cleanup_stale_issue_items!(tracker, bootstrap) do
-    Enum.each(bootstrap.project_issue_items, fn item ->
+    {open_items, closed_items} =
+      Enum.split_with(bootstrap.project_issue_items, fn item -> item.state == "OPEN" end)
+
+    if open_items != [] do
+      issue_numbers =
+        open_items
+        |> Enum.map(&Integer.to_string(&1.number))
+        |> Enum.join(", ")
+
+      raise "Another live smoke run is already active on the sandbox board (issues: #{issue_numbers})."
+    end
+
+    Enum.each(closed_items, fn item ->
       maybe_close_issue(tracker, item.issue_id)
       maybe_delete_project_item(tracker, bootstrap.project_id, item.item_id)
     end)
 
     :ok
+  end
+
+  # Fetch every project item from the sandbox board.
+  #
+  # Paginates the board item connection so the smoke helper can reason about
+  # stale smoke issues and existing PR-backed items even on long-lived boards.
+  #
+  # Returns a list of raw project item maps.
+  defp fetch_project_items!(tracker, project_id) when is_binary(project_id) do
+    fetch_project_items_page!(tracker, project_id, nil, [])
+  end
+
+  # Continue paginating sandbox board items until the connection is exhausted.
+  #
+  # Returns a list of raw project item maps.
+  defp fetch_project_items_page!(tracker, project_id, after_cursor, acc_items) do
+    response =
+      graphql!(
+        tracker,
+        @project_items_query,
+        %{
+          projectId: project_id,
+          statusFieldName: @status_field_name,
+          itemFirst: @item_page_size,
+          after: after_cursor
+        },
+        operation_name: "OvertureLiveSmokeProjectItems"
+      )
+
+    items = get_in(response, ["data", "node", "items", "nodes"]) |> List.wrap()
+    page_info = get_in(response, ["data", "node", "items", "pageInfo"]) || %{}
+    updated_items = acc_items ++ items
+
+    cond do
+      page_info["hasNextPage"] == true and is_binary(page_info["endCursor"]) and page_info["endCursor"] != "" ->
+        fetch_project_items_page!(tracker, project_id, page_info["endCursor"], updated_items)
+
+      page_info["hasNextPage"] == true ->
+        raise "Failed to continue paginating sandbox board items because endCursor was missing."
+
+      true ->
+        updated_items
+    end
   end
 
   # Create a disposable issue and add it to the sandbox board.
@@ -935,9 +1006,8 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   # Extract PR-backed project items already present on the sandbox board.
   #
   # Returns a list of PR item metadata maps.
-  defp project_pull_request_items(project) do
-    project
-    |> get_in(["items", "nodes"])
+  defp project_pull_request_items(items) do
+    items
     |> List.wrap()
     |> Enum.flat_map(fn
       %{
@@ -977,9 +1047,8 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   # does not disturb unrelated sandbox issues already on the board.
   #
   # Returns a list of stale smoke issue item metadata maps.
-  defp project_issue_items(project) do
-    project
-    |> get_in(["items", "nodes"])
+  defp project_issue_items(items) do
+    items
     |> List.wrap()
     |> Enum.flat_map(fn
       %{
@@ -993,7 +1062,7 @@ defmodule SymphonyElixir.LiveSmokeSupport do
           "url" => url,
           "state" => state
         }
-      } ->
+      } = item ->
         if String.starts_with?(title, @issue_title_prefix) do
           [
             %{
@@ -1002,7 +1071,8 @@ defmodule SymphonyElixir.LiveSmokeSupport do
               number: number,
               title: title,
               url: url,
-              state: state
+              state: state,
+              project_state_name: project_state_name(item)
             }
           ]
         else
@@ -1012,6 +1082,16 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       _other ->
         []
     end)
+  end
+
+  # Extract the project workflow state from one sandbox item.
+  #
+  # Returns the single-select status name or `nil`.
+  defp project_state_name(item) when is_map(item) do
+    case Map.get(item, "fieldValueByName") do
+      %{"name" => state_name} when is_binary(state_name) -> state_name
+      _ -> nil
+    end
   end
 
   # Decide whether the smoke marker comment is present on the issue.
