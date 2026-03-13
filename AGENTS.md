@@ -18,11 +18,30 @@ Start here when working in this repository.
 
 ## Repository map
 
-- `README.md`: public-facing repo overview
-- `OVERTURE_BASELINE.md`: fork naming and upstream-sync policy
-- `ARCHITECTURE.md`: current baseline and target GitHub Projects architecture
-- `docs/`: canonical design docs, runtime contract docs, and active execution plans
-- `elixir/`: current runtime implementation and implementation-specific guidance
+```text
+AGENTS.md
+ARCHITECTURE.md
+OVERTURE_BASELINE.md
+README.md
+docs/
+├── README.md
+├── PLANS.md
+├── design-docs/
+│   ├── index.md
+│   ├── fork-baseline-policy.md
+│   ├── github-projects-fork.md
+│   └── tracker-identity-and-routing.md
+├── exec-plans/
+│   └── active/
+│       └── overture-github-projects-migration.md
+└── product-specs/
+    ├── index.md
+    ├── current-runtime-baseline.md
+    └── github-projects-runtime-contract.md
+elixir/
+├── AGENTS.md
+└── WORKFLOW.md
+```
 
 ## Repo-wide rules
 
