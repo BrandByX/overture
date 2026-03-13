@@ -48,6 +48,13 @@ Overture currently ships the upstream Symphony Elixir implementation as its star
   cherry-picked selectively.
 - The GitHub Projects tracker migration is planned work, not completed baseline behavior.
 
+## Repo docs
+
+- `AGENTS.md`
+- `ARCHITECTURE.md`
+- `docs/README.md`
+- `OVERTURE_BASELINE.md`
+
 ---
 
 ## License
