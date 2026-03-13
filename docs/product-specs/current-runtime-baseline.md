@@ -1,6 +1,7 @@
 # Current Runtime Baseline
 
 Created: 2026-03-12
+Updated: 2026-03-13
 
 ## Purpose
 
@@ -11,15 +12,15 @@ Projects migration with the current implementation.
 
 - The current implementation lives under `elixir/`.
 - The shipped sample workflow is `elixir/WORKFLOW.md`.
-- The runtime currently assumes Linear tracker semantics.
-- The runtime currently assumes Linear auth and issue model semantics.
-- The current dynamic tracker tool is still `linear_graphql`.
+- The runtime currently assumes GitHub Projects tracker semantics.
+- The runtime currently assumes GitHub auth and GitHub issue/project item model semantics.
+- The current dynamic tracker tool is `github_graphql`.
 
 ## Current repository posture
 
 - The repository is publicly branded as Overture.
 - GitHub Projects boards already exist operationally for the migration program.
-- The codebase has not yet replaced the runtime tracker implementation with GitHub Projects.
+- The codebase now ships a GitHub Projects-backed runtime baseline.
 
 ## Use this doc when
 
