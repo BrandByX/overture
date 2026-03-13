@@ -74,6 +74,58 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
     assert_received {:github_request, "OvertureProjectItems", _payload, _headers}
   end
 
+  test "fetch_candidate_issues paginates project fields until the configured status field is found" do
+    tracker = Config.settings!().tracker
+
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
+
+      case {payload["operationName"], payload["variables"][:after]} do
+        {"OvertureProjectFieldContract", nil} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_contract_response(
+                 [%{"__typename" => "ProjectV2Field", "id" => "title-field-1", "name" => "Title"}],
+                 has_next_page: true,
+                 end_cursor: "cursor-1"
+               )
+           }}
+
+        {"OvertureProjectFieldContract", "cursor-1"} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_contract_response(
+                 [status_field()],
+                 has_next_page: false,
+                 end_cursor: nil
+               )
+           }}
+
+        {"OvertureProjectItems", _cursor} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_items_response([
+                 issue_item("project-item-1", "Todo", issue: issue_node("issue-node-1", 151, assignees: ["sidney"]))
+               ])
+           }}
+      end
+    end
+
+    assert {:ok, [%Issue{id: "project-item-1"}]} =
+             Client.fetch_candidate_issues_for_test(tracker, request_fun)
+
+    assert_received {:github_request, "OvertureProjectFieldContract", first_payload}
+    assert is_nil(first_payload["variables"][:after])
+    assert_received {:github_request, "OvertureProjectFieldContract", second_payload}
+    assert second_payload["variables"][:after] == "cursor-1"
+  end
+
   test "fetch_issues_by_states ignores assignee routing so cleanup can see all matching items" do
     tracker = %{Config.settings!().tracker | assignee: "sidney"}
 
@@ -269,36 +321,42 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
     assert reopen_payload["variables"][:contentId] == "issue-node-rework"
   end
 
-  defp project_contract_response do
+  defp project_contract_response(fields \\ [status_field()], opts \\ []) do
+    has_next_page = Keyword.get(opts, :has_next_page, false)
+    end_cursor = Keyword.get(opts, :end_cursor)
+
     %{
       "data" => %{
         "organization" => %{
           "projectV2" => %{
             "id" => "project-node-1",
             "fields" => %{
-              "nodes" => [
-                %{
-                  "__typename" => "ProjectV2SingleSelectField",
-                  "id" => "status-field-1",
-                  "name" => "Status",
-                  "options" => [
-                    %{"id" => "option-backlog", "name" => "Backlog"},
-                    %{"id" => "option-todo", "name" => "Todo"},
-                    %{"id" => "option-in-progress", "name" => "In Progress"},
-                    %{"id" => "option-human-review", "name" => "Human Review"},
-                    %{"id" => "option-rework", "name" => "Rework"},
-                    %{"id" => "option-merging", "name" => "Merging"},
-                    %{"id" => "option-done", "name" => "Done"},
-                    %{"id" => "option-cancelled", "name" => "Cancelled"},
-                    %{"id" => "option-duplicate", "name" => "Duplicate"}
-                  ]
-                }
-              ]
+              "nodes" => fields,
+              "pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}
             }
           }
         },
         "user" => nil
       }
+    }
+  end
+
+  defp status_field do
+    %{
+      "__typename" => "ProjectV2SingleSelectField",
+      "id" => "status-field-1",
+      "name" => "Status",
+      "options" => [
+        %{"id" => "option-backlog", "name" => "Backlog"},
+        %{"id" => "option-todo", "name" => "Todo"},
+        %{"id" => "option-in-progress", "name" => "In Progress"},
+        %{"id" => "option-human-review", "name" => "Human Review"},
+        %{"id" => "option-rework", "name" => "Rework"},
+        %{"id" => "option-merging", "name" => "Merging"},
+        %{"id" => "option-done", "name" => "Done"},
+        %{"id" => "option-cancelled", "name" => "Cancelled"},
+        %{"id" => "option-duplicate", "name" => "Duplicate"}
+      ]
     }
   end
 

@@ -23,11 +23,16 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   @id_batch_size 50
 
   @project_contract_query """
-  query OvertureProjectFieldContract($ownerLogin: String!, $projectNumber: Int!, $fieldFirst: Int!) {
+  query OvertureProjectFieldContract(
+    $ownerLogin: String!,
+    $projectNumber: Int!,
+    $fieldFirst: Int!,
+    $after: String
+  ) {
     organization(login: $ownerLogin) {
       projectV2(number: $projectNumber) {
         id
-        fields(first: $fieldFirst) {
+        fields(first: $fieldFirst, after: $after) {
           nodes {
             __typename
             ... on ProjectV2FieldCommon {
@@ -41,13 +46,17 @@ defmodule SymphonyElixir.GitHubProjects.Client do
               }
             }
           }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
       }
     }
     user(login: $ownerLogin) {
       projectV2(number: $projectNumber) {
         id
-        fields(first: $fieldFirst) {
+        fields(first: $fieldFirst, after: $after) {
           nodes {
             __typename
             ... on ProjectV2FieldCommon {
@@ -60,6 +69,10 @@ defmodule SymphonyElixir.GitHubProjects.Client do
                 name
               }
             }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
       }
@@ -555,17 +568,28 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   #
   # Returns `{:ok, project_map}` or `{:error, reason}`.
   defp fetch_project(tracker, request_fun) do
-    variables = %{
-      ownerLogin: tracker.owner_login,
-      projectNumber: tracker.project_number,
-      fieldFirst: @field_page_size
-    }
-
     owner_field =
       case tracker.owner_type do
         "organization" -> "organization"
         "user" -> "user"
       end
+
+    fetch_project_field_page(tracker, owner_field, nil, [], request_fun)
+  end
+
+  # Fetch one page of project field metadata and continue until the status field appears.
+  #
+  # Paginates the `ProjectV2.fields` connection so status field lookup remains
+  # correct on boards with more fields than the initial page size.
+  #
+  # Returns `{:ok, project_map}` or `{:error, reason}`.
+  defp fetch_project_field_page(tracker, owner_field, after_cursor, acc_fields, request_fun) do
+    variables = %{
+      ownerLogin: tracker.owner_login,
+      projectNumber: tracker.project_number,
+      fieldFirst: @field_page_size,
+      after: after_cursor
+    }
 
     with {:ok, response} <-
            graphql(@project_contract_query, variables,
@@ -573,8 +597,28 @@ defmodule SymphonyElixir.GitHubProjects.Client do
              request_fun: request_fun,
              operation_name: "OvertureProjectFieldContract"
            ),
-         {:ok, project} <- extract_project(response, owner_field) do
-      {:ok, project}
+         {:ok, project, page_info} <- extract_project(response, owner_field) do
+      updated_fields =
+        acc_fields ++
+          (project
+           |> get_in(["fields", "nodes"])
+           |> List.wrap())
+
+      project = put_in(project, ["fields", "nodes"], updated_fields)
+
+      cond do
+        status_field_present?(updated_fields, tracker.status_field_name) ->
+          {:ok, project}
+
+        page_info.has_next_page == true and is_binary(page_info.end_cursor) and page_info.end_cursor != "" ->
+          fetch_project_field_page(tracker, owner_field, page_info.end_cursor, updated_fields, request_fun)
+
+        page_info.has_next_page == true ->
+          {:error, :github_projects_missing_end_cursor}
+
+        true ->
+          {:ok, project}
+      end
     end
   end
 
@@ -969,12 +1013,30 @@ defmodule SymphonyElixir.GitHubProjects.Client do
 
   defp extract_project(%{"data" => data}, owner_field) when is_map(data) do
     case get_in(data, [owner_field, "projectV2"]) do
-      %{} = project -> {:ok, project}
-      _ -> {:error, :github_projects_project_not_found}
+      %{"fields" => %{"pageInfo" => page_info}} = project ->
+        {:ok, project, %{has_next_page: page_info["hasNextPage"] == true, end_cursor: page_info["endCursor"]}}
+
+      %{} = project ->
+        {:ok, project, %{has_next_page: false, end_cursor: nil}}
+
+      _ ->
+        {:error, :github_projects_project_not_found}
     end
   end
 
   defp extract_project(_response, _owner_field), do: {:error, :github_projects_project_not_found}
+
+  # Detect whether the configured workflow field is already present in loaded field pages.
+  #
+  # Returns `true` when the field list contains the named status field.
+  defp status_field_present?(fields, status_field_name) when is_list(fields) and is_binary(status_field_name) do
+    Enum.any?(fields, fn
+      %{"name" => ^status_field_name} -> true
+      _field -> false
+    end)
+  end
+
+  defp status_field_present?(_fields, _status_field_name), do: false
 
   # Find the configured workflow field on the project.
   #
@@ -1151,7 +1213,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
 
     cond do
       normalized_login == "" ->
-        {:ok, nil}
+        {:error, {:invalid_workflow_config, "tracker.assignee must be an explicit GitHub login for github_projects"}}
 
       normalized_login == "me" ->
         {:error, {:invalid_workflow_config, "tracker.assignee: me is not supported for github_projects; use an explicit GitHub login"}}

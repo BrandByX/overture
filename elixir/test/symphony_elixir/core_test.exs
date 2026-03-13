@@ -98,6 +98,10 @@ defmodule SymphonyElixir.CoreTest do
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
     assert message =~ "tracker.assignee: me is not supported"
 
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_assignee: "   ")
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.assignee must be an explicit GitHub login"
+
     write_workflow_file!(Workflow.workflow_file_path(), tracker_status_field_name: "Phase")
     assert {:error, {:github_projects_status_field_not_found, "Phase"}} = Config.validate!()
 

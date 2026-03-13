@@ -141,6 +141,9 @@ defmodule SymphonyElixir.Config do
       settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.status_field_name) ->
         {:error, {:invalid_workflow_config, "tracker.status_field_name must be set for github_projects"}}
 
+      settings.tracker.kind == "github_projects" and is_binary(settings.tracker.assignee) and String.trim(settings.tracker.assignee) == "" ->
+        {:error, {:invalid_workflow_config, "tracker.assignee must be an explicit GitHub login for github_projects"}}
+
       settings.tracker.kind == "github_projects" and settings.tracker.assignee == "me" ->
         {:error, {:invalid_workflow_config, "tracker.assignee: me is not supported for github_projects; use an explicit GitHub login"}}
 
