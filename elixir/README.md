@@ -1,30 +1,40 @@
-# Symphony Elixir
+# Overture Elixir
 
-This directory contains the current Elixir/OTP implementation of Symphony, based on
+This directory contains the current Elixir/OTP implementation shipped in Overture, based on
 [`SPEC.md`](../SPEC.md) at the repository root.
 
 > [!WARNING]
-> Symphony Elixir is prototype software intended for evaluation only and is presented as-is.
+> Overture Elixir is prototype software intended for evaluation only and is presented as-is.
 > We recommend implementing your own hardened version based on `SPEC.md`.
 
 ## Screenshot
 
-![Symphony Elixir screenshot](../.github/media/elixir-screenshot.png)
+![Overture Elixir screenshot](../.github/media/elixir-screenshot.png)
+
+## v1 naming and scope
+
+The fork now presents itself publicly as Overture, but the implementation remains intentionally
+conservative in v1.
+
+- Public-facing repo and docs use the Overture name.
+- Internal runtime identifiers remain `SymphonyElixir`, `:symphony_elixir`, and `./bin/symphony`.
+- The current Elixir implementation still reflects the upstream Linear-oriented baseline while the
+  GitHub Projects migration is underway.
 
 ## How it works
 
-1. Polls Linear for candidate work
+1. Polls Linear for candidate work in the current baseline
 2. Creates a workspace per issue
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
+During app-server sessions, Overture also serves a client-side `linear_graphql` tool so that repo
 skills can make raw Linear GraphQL calls.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
-Symphony stops the active agent for that issue and cleans up matching workspaces.
+Overture stops the active agent for that issue and cleans up matching workspaces.
 
 ## How to use it
 
@@ -56,8 +66,8 @@ mise exec -- elixir --version
 ## Run
 
 ```bash
-git clone https://github.com/openai/symphony
-cd symphony/elixir
+git clone https://github.com/BrandByX/overture
+cd overture/elixir
 mise trust
 mise install
 mise exec -- mix setup
@@ -73,11 +83,11 @@ Pass a custom workflow file path to `./bin/symphony` when starting the service:
 ./bin/symphony /path/to/custom/WORKFLOW.md
 ```
 
-If no path is passed, Symphony defaults to `./WORKFLOW.md`.
+If no path is passed, Overture defaults to `./WORKFLOW.md`.
 
 Optional flags:
 
-- `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
+- `--logs-root` tells Overture to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
 
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
@@ -145,8 +155,8 @@ codex:
   command: "$CODEX_BIN app-server --model gpt-5.3-codex"
 ```
 
-- If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.
-- If a later reload fails, Symphony keeps running with the last known good workflow and logs the
+- If `WORKFLOW.md` is missing or has invalid YAML at startup, Overture does not boot.
+- If a later reload fails, Overture keeps running with the last known good workflow and logs the
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
@@ -173,7 +183,7 @@ The observability UI now runs on a minimal Phoenix stack:
 make all
 ```
 
-Run the real external end-to-end test only when you want Symphony to create disposable Linear
+Run the real external end-to-end test only when you want Overture to create disposable Linear
 resources and launch a real `codex app-server` session:
 
 ```bash
@@ -193,7 +203,7 @@ Optional environment variables:
 
 If `SYMPHONY_LIVE_SSH_WORKER_HOSTS` is unset, the SSH scenario uses `docker compose` to start two
 disposable SSH workers on `localhost:<port>`. The live test generates a temporary SSH keypair,
-mounts the host `~/.codex/auth.json` into each worker, verifies that Symphony can talk to them
+mounts the host `~/.codex/auth.json` into each worker, verifies that Overture can talk to them
 over real SSH, then runs the same orchestration flow against those worker addresses. This keeps
 the transport representative without depending on long-lived external machines.
 
@@ -213,7 +223,7 @@ actively running subagents, which is very useful during development.
 
 ### What's the easiest way to set this up for my own codebase?
 
-Launch `codex` in your repo, give it the URL to the Symphony repo, and ask it to set things up for
+Launch `codex` in your repo, give it the URL to the Overture repo, and ask it to set things up for
 you.
 
 ## License
