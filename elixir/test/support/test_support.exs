@@ -1,5 +1,71 @@
 defmodule SymphonyElixir.TestSupport do
   @workflow_prompt "You are an agent for this repository."
+  @default_tracker_active_states ["Todo", "In Progress", "Human Review", "Rework", "Merging"]
+  @default_tracker_terminal_states ["Done", "Cancelled", "Duplicate"]
+
+  defmodule FakeGitHubProjectsClient do
+    @moduledoc false
+
+    # Validate tracker config with a deterministic fake board contract.
+    #
+    # Supports opt-in failure injection through the process dictionary so config
+    # and workflow tests can exercise validation behavior without network calls.
+    #
+    # Returns `:ok` or `{:error, reason}`.
+    def validate_tracker_config(tracker) do
+      case Process.get({__MODULE__, :validate_result}) do
+        nil -> validate_field_contract(tracker)
+        result -> result
+      end
+    end
+
+    # Build the fake board contract used by tracker validation tests.
+    #
+    # Mirrors the GitHub Projects single-select workflow field contract expected
+    # by the production config validator.
+    #
+    # Returns `:ok` or `{:error, reason}`.
+    defp validate_field_contract(tracker) do
+      if tracker.status_field_name != "Status" do
+        {:error, {:github_projects_status_field_not_found, tracker.status_field_name}}
+      else
+        validate_state_options(tracker)
+      end
+    end
+
+    # Validate configured workflow states against the fake single-select options.
+    #
+    # Mirrors the live GitHub board contract closely enough for config tests
+    # without requiring network access.
+    #
+    # Returns `:ok` or `{:error, reason}`.
+    defp validate_state_options(tracker) do
+      option_names =
+        [
+          "Backlog",
+          "Todo",
+          "In Progress",
+          "Human Review",
+          "Rework",
+          "Merging",
+          "Done",
+          "Cancelled",
+          "Duplicate"
+        ]
+        |> MapSet.new()
+
+      missing_states =
+        tracker.active_states
+        |> Kernel.++(tracker.terminal_states)
+        |> Enum.uniq()
+        |> Enum.reject(&MapSet.member?(option_names, &1))
+
+      case missing_states do
+        [] -> :ok
+        _ -> {:error, {:github_projects_missing_state_options, missing_states}}
+      end
+    end
+  end
 
   defmacro __using__(_opts) do
     quote do
@@ -12,11 +78,11 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Config
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
-      alias SymphonyElixir.Linear.Issue
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
+      alias SymphonyElixir.Tracker.Issue
       alias SymphonyElixir.Workflow
       alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
@@ -38,11 +104,32 @@ defmodule SymphonyElixir.TestSupport do
         if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
         stop_default_http_server()
 
+        previous_github_projects_client_module =
+          Application.get_env(:symphony_elixir, :github_projects_client_module)
+
+        Application.put_env(
+          :symphony_elixir,
+          :github_projects_client_module,
+          SymphonyElixir.TestSupport.FakeGitHubProjectsClient
+        )
+
         on_exit(fn ->
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+          Process.delete({SymphonyElixir.TestSupport.FakeGitHubProjectsClient, :validate_result})
+
+          if is_nil(previous_github_projects_client_module) do
+            Application.delete_env(:symphony_elixir, :github_projects_client_module)
+          else
+            Application.put_env(
+              :symphony_elixir,
+              :github_projects_client_module,
+              previous_github_projects_client_module
+            )
+          end
+
           File.rm_rf(workflow_root)
         end)
 
@@ -92,13 +179,16 @@ defmodule SymphonyElixir.TestSupport do
     config =
       Keyword.merge(
         [
-          tracker_kind: "linear",
-          tracker_endpoint: "https://api.linear.app/graphql",
+          tracker_kind: "github_projects",
           tracker_api_token: "token",
-          tracker_project_slug: "project",
+          tracker_owner_type: "organization",
+          tracker_owner_login: "BrandByX",
+          tracker_project_number: 6,
+          tracker_repository: "BrandByX/overture",
+          tracker_status_field_name: "Status",
           tracker_assignee: nil,
-          tracker_active_states: ["Todo", "In Progress"],
-          tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+          tracker_active_states: @default_tracker_active_states,
+          tracker_terminal_states: @default_tracker_terminal_states,
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
           worker_ssh_hosts: [],
@@ -130,9 +220,12 @@ defmodule SymphonyElixir.TestSupport do
       )
 
     tracker_kind = Keyword.get(config, :tracker_kind)
-    tracker_endpoint = Keyword.get(config, :tracker_endpoint)
     tracker_api_token = Keyword.get(config, :tracker_api_token)
-    tracker_project_slug = Keyword.get(config, :tracker_project_slug)
+    tracker_owner_type = Keyword.get(config, :tracker_owner_type)
+    tracker_owner_login = Keyword.get(config, :tracker_owner_login)
+    tracker_project_number = Keyword.get(config, :tracker_project_number)
+    tracker_repository = Keyword.get(config, :tracker_repository)
+    tracker_status_field_name = Keyword.get(config, :tracker_status_field_name)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
@@ -168,9 +261,12 @@ defmodule SymphonyElixir.TestSupport do
         "---",
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
-        "  endpoint: #{yaml_value(tracker_endpoint)}",
         "  api_key: #{yaml_value(tracker_api_token)}",
-        "  project_slug: #{yaml_value(tracker_project_slug)}",
+        "  owner_type: #{yaml_value(tracker_owner_type)}",
+        "  owner_login: #{yaml_value(tracker_owner_login)}",
+        "  project_number: #{yaml_value(tracker_project_number)}",
+        "  repository: #{yaml_value(tracker_repository)}",
+        "  status_field_name: #{yaml_value(tracker_status_field_name)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",

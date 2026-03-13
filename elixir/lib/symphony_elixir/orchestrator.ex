@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Orchestrator do
   @moduledoc """
-  Polls Linear and dispatches repository copies to Codex-backed workers.
+  Polls the configured tracker and dispatches repository copies to Codex-backed workers.
   """
 
   use GenServer
@@ -8,7 +8,7 @@ defmodule SymphonyElixir.Orchestrator do
   import Bitwise, only: [<<<: 2]
 
   alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Tracker.Issue
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
@@ -229,12 +229,16 @@ defmodule SymphonyElixir.Orchestrator do
          true <- available_slots(state) > 0 do
       choose_issues(issues, state)
     else
-      {:error, :missing_linear_api_token} ->
-        Logger.error("Linear API token missing in WORKFLOW.md")
+      {:error, :missing_github_api_token} ->
+        Logger.error("GitHub API token missing in WORKFLOW.md")
         state
 
-      {:error, :missing_linear_project_slug} ->
-        Logger.error("Linear project slug missing in WORKFLOW.md")
+      {:error, :invalid_github_owner_type} ->
+        Logger.error("GitHub Projects owner_type must be \"organization\" or \"user\" in WORKFLOW.md")
+        state
+
+      {:error, :invalid_github_repository} ->
+        Logger.error("GitHub Projects repository must be in owner/repo form in WORKFLOW.md")
         state
 
       {:error, :missing_tracker_kind} ->
@@ -245,6 +249,19 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, {:unsupported_tracker_kind, kind}} ->
         Logger.error("Unsupported tracker kind in WORKFLOW.md: #{inspect(kind)}")
 
+        state
+
+      {:error, {:github_projects_status_field_not_found, field_name}} ->
+        Logger.error("GitHub Projects status field not found during validation: #{inspect(field_name)}")
+        state
+
+      {:error, {:github_projects_status_field_not_single_select, field_name, typename}} ->
+        Logger.error("GitHub Projects status field must be a ProjectV2SingleSelectField: field=#{inspect(field_name)} type=#{inspect(typename)}")
+
+        state
+
+      {:error, {:github_projects_missing_state_options, missing_states}} ->
+        Logger.error("GitHub Projects status field is missing workflow states: #{inspect(missing_states)}")
         state
 
       {:error, {:invalid_workflow_config, message}} ->
@@ -264,7 +281,7 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:error, reason} ->
-        Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
+        Logger.error("Tracker operation failed: #{inspect(reason)}")
         state
 
       false ->
@@ -352,7 +369,7 @@ defmodule SymphonyElixir.Orchestrator do
         terminate_running_issue(state, issue.id, true)
 
       !issue_routable_to_worker?(issue) ->
-        Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
+        Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignees=#{inspect(issue.assignee_logins)}; stopping active agent")
 
         terminate_running_issue(state, issue.id, false)
 

@@ -46,12 +46,15 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:kind, :string)
-      field(:endpoint, :string, default: "https://api.linear.app/graphql")
       field(:api_key, :string)
-      field(:project_slug, :string)
+      field(:owner_type, :string)
+      field(:owner_login, :string)
+      field(:project_number, :integer)
+      field(:repository, :string)
+      field(:status_field_name, :string, default: "Status")
       field(:assignee, :string)
-      field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
-      field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:active_states, {:array, :string}, default: ["Todo", "In Progress", "Human Review", "Rework", "Merging"])
+      field(:terminal_states, {:array, :string}, default: ["Done", "Cancelled", "Duplicate"])
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -59,7 +62,18 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [
+          :kind,
+          :api_key,
+          :owner_type,
+          :owner_login,
+          :project_number,
+          :repository,
+          :status_field_name,
+          :assignee,
+          :active_states,
+          :terminal_states
+        ],
         empty_values: []
       )
     end
@@ -368,8 +382,8 @@ defmodule SymphonyElixir.Config.Schema do
   defp finalize_settings(settings) do
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
-        assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("GITHUB_TOKEN")),
+        assignee: normalize_secret_value(settings.tracker.assignee)
     }
 
     workspace = %{
@@ -413,9 +427,11 @@ defmodule SymphonyElixir.Config.Schema do
   defp drop_nil_values(value) when is_list(value), do: Enum.map(value, &drop_nil_values/1)
   defp drop_nil_values(value), do: value
 
-  defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
+  @doc false
+  @spec resolve_secret_setting(term(), term()) :: term()
+  def resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
 
-  defp resolve_secret_setting(value, fallback) when is_binary(value) do
+  def resolve_secret_setting(value, fallback) when is_binary(value) do
     case resolve_env_value(value, fallback) do
       resolved when is_binary(resolved) -> normalize_secret_value(resolved)
       resolved -> resolved
