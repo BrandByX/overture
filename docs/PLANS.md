@@ -6,6 +6,7 @@ Created: 2026-03-12
 
 - Delivery board: <https://github.com/orgs/BrandByX/projects/6>
 - Sandbox board: <https://github.com/orgs/BrandByX/projects/5>
+- Live board metadata: `references/github-projects-board-metadata.md`
 
 ## Active execution plan
 
@@ -25,5 +26,5 @@ Created: 2026-03-12
 ## Planning notes
 
 - Ticket `#1` establishes the public-facing fork and harness baseline.
-- Ticket `#2` owns the GitHub Projects board contract and field semantics.
+- Ticket `#2` owns the GitHub Projects board contract, field semantics, and live metadata capture.
 - Tickets `#3` through `#8` are the implementation sequence for the GitHub Projects runtime fork.

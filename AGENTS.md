@@ -12,9 +12,10 @@ Start here when working in this repository.
 4. `docs/README.md`
 5. `docs/design-docs/index.md`
 6. `docs/product-specs/index.md`
-7. `docs/PLANS.md`
-8. `elixir/AGENTS.md`
-9. `elixir/WORKFLOW.md`
+7. `docs/references/index.md`
+8. `docs/PLANS.md`
+9. `elixir/AGENTS.md`
+10. `elixir/WORKFLOW.md`
 
 ## Repository map
 
@@ -34,6 +35,9 @@ docs/
 ├── exec-plans/
 │   └── active/
 │       └── overture-github-projects-migration.md
+├── references/
+│   ├── index.md
+│   └── github-projects-board-metadata.md
 └── product-specs/
     ├── index.md
     ├── current-runtime-baseline.md

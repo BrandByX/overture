@@ -64,4 +64,5 @@ The migration is intentionally staged.
 - `docs/design-docs/tracker-identity-and-routing.md`
 - `docs/product-specs/current-runtime-baseline.md`
 - `docs/product-specs/github-projects-runtime-contract.md`
+- `docs/references/github-projects-board-metadata.md`
 - `docs/exec-plans/active/overture-github-projects-migration.md`
