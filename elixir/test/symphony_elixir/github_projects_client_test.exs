@@ -126,6 +126,63 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
     assert second_payload["variables"][:after] == "cursor-1"
   end
 
+  test "fetch_candidate_issues queries only the configured owner branch for project contract lookup" do
+    organization_tracker = %{Config.settings!().tracker | owner_type: "organization", owner_login: "BrandByX"}
+    user_tracker = %{Config.settings!().tracker | owner_type: "user", owner_login: "sidney"}
+
+    organization_request_fun = fn payload, _headers ->
+      send(self(), {:organization_request, payload["operationName"], payload})
+
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: project_contract_response([status_field()], owner_type: "organization")}}
+
+        "OvertureProjectItems" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_items_response([
+                 issue_item("project-item-1", "Todo", issue: issue_node("issue-node-1", 161, assignees: ["sidney"]))
+               ])
+           }}
+      end
+    end
+
+    user_request_fun = fn payload, _headers ->
+      send(self(), {:user_request, payload["operationName"], payload})
+
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: project_contract_response([status_field()], owner_type: "user")}}
+
+        "OvertureProjectItems" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_items_response([
+                 issue_item("project-item-2", "Todo", issue: issue_node("issue-node-2", 162, assignees: ["sidney"]))
+               ])
+           }}
+      end
+    end
+
+    assert {:ok, [%Issue{id: "project-item-1"}]} =
+             Client.fetch_candidate_issues_for_test(organization_tracker, organization_request_fun)
+
+    assert_received {:organization_request, "OvertureProjectFieldContract", organization_payload}
+    assert organization_payload["query"] =~ "organization(login: $ownerLogin)"
+    refute organization_payload["query"] =~ "user(login: $ownerLogin)"
+
+    assert {:ok, [%Issue{id: "project-item-2"}]} =
+             Client.fetch_candidate_issues_for_test(user_tracker, user_request_fun)
+
+    assert_received {:user_request, "OvertureProjectFieldContract", user_payload}
+    assert user_payload["query"] =~ "user(login: $ownerLogin)"
+    refute user_payload["query"] =~ "organization(login: $ownerLogin)"
+  end
+
   test "fetch_issues_by_states ignores assignee routing so cleanup can see all matching items" do
     tracker = %{Config.settings!().tracker | assignee: "sidney"}
 
@@ -324,20 +381,41 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
   defp project_contract_response(fields \\ [status_field()], opts \\ []) do
     has_next_page = Keyword.get(opts, :has_next_page, false)
     end_cursor = Keyword.get(opts, :end_cursor)
+    owner_type = Keyword.get(opts, :owner_type, "organization")
 
-    %{
-      "data" => %{
-        "organization" => %{
-          "projectV2" => %{
-            "id" => "project-node-1",
-            "fields" => %{
-              "nodes" => fields,
-              "pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}
+    data =
+      case owner_type do
+        "organization" ->
+          %{
+            "organization" => %{
+              "projectV2" => %{
+                "id" => "project-node-1",
+                "fields" => %{
+                  "nodes" => fields,
+                  "pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}
+                }
+              }
+            },
+            "user" => nil
+          }
+
+        "user" ->
+          %{
+            "organization" => nil,
+            "user" => %{
+              "projectV2" => %{
+                "id" => "project-node-1",
+                "fields" => %{
+                  "nodes" => fields,
+                  "pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}
+                }
+              }
             }
           }
-        },
-        "user" => nil
-      }
+      end
+
+    %{
+      "data" => data
     }
   end
 

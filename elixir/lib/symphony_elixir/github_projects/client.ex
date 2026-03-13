@@ -22,64 +22,6 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   @label_page_size 50
   @id_batch_size 50
 
-  @project_contract_query """
-  query OvertureProjectFieldContract(
-    $ownerLogin: String!,
-    $projectNumber: Int!,
-    $fieldFirst: Int!,
-    $after: String
-  ) {
-    organization(login: $ownerLogin) {
-      projectV2(number: $projectNumber) {
-        id
-        fields(first: $fieldFirst, after: $after) {
-          nodes {
-            __typename
-            ... on ProjectV2FieldCommon {
-              id
-              name
-            }
-            ... on ProjectV2SingleSelectField {
-              options {
-                id
-                name
-              }
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-    user(login: $ownerLogin) {
-      projectV2(number: $projectNumber) {
-        id
-        fields(first: $fieldFirst, after: $after) {
-          nodes {
-            __typename
-            ... on ProjectV2FieldCommon {
-              id
-              name
-            }
-            ... on ProjectV2SingleSelectField {
-              options {
-                id
-                name
-              }
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-  }
-  """
-
   @project_items_query """
   query OvertureProjectItems(
     $projectId: ID!,
@@ -595,7 +537,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     }
 
     with {:ok, response} <-
-           graphql(@project_contract_query, variables,
+           graphql(project_contract_query(owner_field), variables,
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureProjectFieldContract"
@@ -623,6 +565,49 @@ defmodule SymphonyElixir.GitHubProjects.Client do
           {:ok, project}
       end
     end
+  end
+
+  # Build the owner-specific project contract query for the configured board owner.
+  #
+  # GitHub returns a `NOT_FOUND` GraphQL error when a query asks for `user(...)`
+  # against an organization login, so contract lookup must only query the
+  # configured owner branch.
+  #
+  # Returns a GraphQL query string.
+  defp project_contract_query(owner_field) when owner_field in ["organization", "user"] do
+    """
+    query OvertureProjectFieldContract(
+      $ownerLogin: String!,
+      $projectNumber: Int!,
+      $fieldFirst: Int!,
+      $after: String
+    ) {
+      #{owner_field}(login: $ownerLogin) {
+        projectV2(number: $projectNumber) {
+          id
+          fields(first: $fieldFirst, after: $after) {
+            nodes {
+              __typename
+              ... on ProjectV2FieldCommon {
+                id
+                name
+              }
+              ... on ProjectV2SingleSelectField {
+                options {
+                  id
+                  name
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
   end
 
   # Fetch all project items whose workflow state matches the requested names.
