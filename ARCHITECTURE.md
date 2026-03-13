@@ -59,7 +59,9 @@ The migration is intentionally staged.
 ## Canonical references
 
 - `OVERTURE_BASELINE.md`
+- `docs/design-docs/fork-baseline-policy.md`
 - `docs/design-docs/github-projects-fork.md`
 - `docs/design-docs/tracker-identity-and-routing.md`
+- `docs/product-specs/current-runtime-baseline.md`
 - `docs/product-specs/github-projects-runtime-contract.md`
 - `docs/exec-plans/active/overture-github-projects-migration.md`
