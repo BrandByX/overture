@@ -203,12 +203,42 @@ make all
 
 The supported quality gate today is `make all`.
 
-GitHub Projects live smoke coverage is planned as a dedicated follow-up and is not yet the
-documented default validation path in this directory. Until that lands, prefer:
+GitHub Projects live smoke coverage now exists as an opt-in path rather than part of the default
+fast test gate. Use:
 
 - `make all` for the main implementation gate
 - targeted ExUnit coverage for tracker/runtime changes
-- manual sandbox-board validation when you need end-to-end confidence against a real project
+- the dedicated live smoke command when you need end-to-end confidence against a real project
+
+### GitHub Projects live smoke
+
+The live smoke path starts the real Overture orchestrator during the ExUnit run, uses the real
+`Overture Sandbox` board, creates a disposable issue-backed project item, and proves that Overture
+can:
+
+- poll and claim a live issue-backed board item
+- create a real workspace
+- leave behind a deterministic workspace side effect
+- comment on the linked GitHub issue
+- transition the project item to `Done`
+- ignore a PR-linked project item on the same board
+
+Prerequisites:
+
+- `GITHUB_TOKEN` must be set with issue and project write access for `BrandByX/overture`
+- `OVERTURE_LIVE_SMOKE=1` must be set to opt into the live smoke path
+
+Run it from this directory:
+
+```bash
+export GITHUB_TOKEN=your_token_here
+export OVERTURE_LIVE_SMOKE=1
+mise exec -- mix test test/symphony_elixir/live_e2e_test.exs
+```
+
+For the full operator contract and cleanup behavior, see:
+
+- [`../docs/references/live-smoke-runbook.md`](../docs/references/live-smoke-runbook.md)
 
 ## FAQ
 

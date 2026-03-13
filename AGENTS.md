@@ -13,6 +13,7 @@ Start here when working in this repository.
 5. `docs/design-docs/index.md`
 6. `docs/product-specs/index.md`
 7. `docs/references/index.md`
+   Read `docs/references/live-smoke-runbook.md` before running sandbox-backed live smoke.
 8. `docs/PLANS.md`
 9. `elixir/AGENTS.md`
 10. `elixir/WORKFLOW.md`
@@ -37,7 +38,8 @@ docs/
 │       └── overture-github-projects-migration.md
 ├── references/
 │   ├── index.md
-│   └── github-projects-board-metadata.md
+│   ├── github-projects-board-metadata.md
+│   └── live-smoke-runbook.md
 └── product-specs/
     ├── index.md
     ├── current-runtime-baseline.md
