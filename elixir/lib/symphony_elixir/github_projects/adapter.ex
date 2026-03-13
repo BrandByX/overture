@@ -11,6 +11,8 @@ defmodule SymphonyElixir.GitHubProjects.Adapter do
 
   @behaviour SymphonyElixir.Tracker
 
+  alias SymphonyElixir.Tracker.Issue
+
   @doc """
   Return the placeholder fetch response for candidate issues.
 
@@ -49,8 +51,8 @@ defmodule SymphonyElixir.GitHubProjects.Adapter do
 
   Returns `{:error, :github_projects_not_implemented}`.
   """
-  @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
-  def create_comment(_issue_id, _body), do: {:error, :github_projects_not_implemented}
+  @spec create_comment(Issue.t(), String.t()) :: :ok | {:error, term()}
+  def create_comment(%Issue{}, _body), do: {:error, :github_projects_not_implemented}
 
   @doc """
   Return the placeholder mutation response for tracker state updates.
@@ -59,6 +61,6 @@ defmodule SymphonyElixir.GitHubProjects.Adapter do
 
   Returns `{:error, :github_projects_not_implemented}`.
   """
-  @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
-  def update_issue_state(_issue_id, _state_name), do: {:error, :github_projects_not_implemented}
+  @spec update_issue_state(Issue.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_state(%Issue{}, _state_name), do: {:error, :github_projects_not_implemented}
 end

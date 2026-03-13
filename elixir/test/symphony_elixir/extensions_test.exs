@@ -148,25 +148,27 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues()
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
-    assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
-    assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
+    assert :ok = SymphonyElixir.Tracker.create_comment(issue, "comment")
+    assert :ok = SymphonyElixir.Tracker.update_issue_state(issue, "Done")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
     assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
 
     Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-    assert :ok = Memory.create_comment("issue-1", "quiet")
-    assert :ok = Memory.update_issue_state("issue-1", "Quiet")
+    assert :ok = Memory.create_comment(issue, "quiet")
+    assert :ok = Memory.update_issue_state(issue, "Quiet")
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "github_projects")
     assert SymphonyElixir.Tracker.adapter() == Adapter
   end
 
   test "github projects adapter is a deliberate placeholder in ticket #3" do
+    issue = %Issue{id: "project-item-1", content_id: "issue-node-1", identifier: "BrandByX/overture#1"}
+
     assert {:error, :github_projects_not_implemented} = Adapter.fetch_candidate_issues()
     assert {:error, :github_projects_not_implemented} = Adapter.fetch_issues_by_states(["Todo"])
     assert {:error, :github_projects_not_implemented} = Adapter.fetch_issue_states_by_ids(["issue-1"])
-    assert {:error, :github_projects_not_implemented} = Adapter.create_comment("issue-1", "hello")
-    assert {:error, :github_projects_not_implemented} = Adapter.update_issue_state("issue-1", "Done")
+    assert {:error, :github_projects_not_implemented} = Adapter.create_comment(issue, "hello")
+    assert {:error, :github_projects_not_implemented} = Adapter.update_issue_state(issue, "Done")
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
