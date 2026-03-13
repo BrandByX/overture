@@ -180,7 +180,9 @@ The agent should be able to talk to the configured tracker. If the required trac
 
 When a ticket has an attached PR, run this protocol before moving to `Human Review`:
 
-1. Identify the PR number from issue links/attachments.
+1. Identify the PR number using GitHub-native issue/PR linkage.
+   - Prefer linked development references, PR body closing keywords, or cross-linked issue/PR comments.
+   - If linkage is not obvious, search open PRs by branch name, issue identifier, or issue number.
 2. Gather feedback from all channels:
    - Top-level PR comments (`gh pr view --comments`).
    - Inline review comments (`gh api repos/<owner>/<repo>/pulls/<pr>/comments`).
@@ -223,16 +225,20 @@ Use this only when completion is blocked by missing required tools or missing au
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
-    - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
+    - If app-touching, use repo-provided runtime validation and QA evidence tooling when it exists.
+    - If the repo does not yet ship dedicated app-launch or media-upload tooling, run the best available app-specific validation path you can support in-session and record the evidence plus any remaining limitations in the workpad.
 6.  Re-check all acceptance criteria and close any gaps.
 7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
-8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
+8.  Ensure the PR is linked back to the issue using GitHub-native linkage.
+    - Prefer PR body keywords such as `Closes #<issue_number>` or another explicit issue reference in the PR body.
+    - If GitHub-native linkage cannot be established in-session, record the PR URL in the workpad as a fallback.
     - Ensure the GitHub PR has label `symphony` (add it if missing).
 9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
 10. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
-    - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
+    - Prefer to rely on GitHub-native issue/PR linkage instead of duplicating the PR URL in the workpad.
+    - If native linkage could not be confirmed in-session, include the PR URL in the workpad handoff notes as the documented fallback.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
 11. Before moving to `Human Review`, poll PR feedback and checks:
@@ -278,7 +284,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - PR feedback sweep is complete and no actionable comments remain.
 - PR checks are green, branch is pushed, and PR is linked on the issue.
 - Required PR metadata is present (`symphony` label).
-- If app-touching, runtime validation/media requirements from `App runtime validation (required)` are complete.
+- If app-touching, the repo's documented runtime validation and QA evidence requirements are complete, or the workpad clearly records the best available validation proof plus any remaining tooling gap.
 
 ## Guardrails
 
