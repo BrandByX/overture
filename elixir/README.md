@@ -42,6 +42,11 @@ Important v1 tracker semantics:
 - PR-linked project items, draft items, archived items, redacted items, and wrong-repo items are
   skipped by the poller.
 - The project `Status` field is the workflow source of truth.
+- `tracker.priority_field_name` is optional and may point to either a numeric GitHub Projects field
+  or a single-select field with an explicit `tracker.priority_option_map`.
+- Same-board blockers use project workflow state semantics; off-board blockers fall back to GitHub
+  issue `OPEN` / `CLOSED`.
+- `branch_name` is only populated when the linked issue has exactly one linked branch.
 - `tracker.assignee` must be an explicit GitHub login when used.
 - `tracker.assignee: me` is intentionally unsupported in v1.
 
@@ -61,6 +66,9 @@ Important v1 tracker semantics:
      `tracker.repository` to the board/repo you want Overture to manage.
    - Ensure `tracker.status_field_name` points to a GitHub Projects single-select field, usually
      `Status`.
+   - If you want priority-aware dispatch, set `tracker.priority_field_name` to either:
+     - a numeric GitHub Projects field with values `1..4`, or
+     - a single-select field plus `tracker.priority_option_map`
    - Make the configured `active_states` and `terminal_states` match the options present on that
      field.
    - If you want assignee-based routing, set `tracker.assignee` to an explicit GitHub login.
@@ -155,6 +163,11 @@ Notes:
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `GITHUB_TOKEN` when unset or when value is `$GITHUB_TOKEN`.
 - `tracker.status_field_name` must resolve to a `ProjectV2SingleSelectField`.
+- `tracker.priority_field_name` is optional:
+  - numeric fields accept whole values `1..4`
+  - single-select fields require `tracker.priority_option_map`
+- `tracker.priority_option_map` is invalid unless `tracker.priority_field_name` points to a
+  single-select field.
 - `tracker.assignee: me` is rejected in v1; use an explicit GitHub login instead.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
@@ -213,8 +226,7 @@ fast test gate. Use:
 ### GitHub Projects live smoke
 
 The live smoke path starts the real Overture orchestrator during the ExUnit run, uses the real
-`Overture Sandbox` board, creates a disposable issue-backed project item, and proves that Overture
-can:
+`Overture Sandbox` board, creates disposable issue-backed fixtures, and proves that Overture can:
 
 - poll and claim a live issue-backed board item
 - create a real workspace
@@ -222,11 +234,18 @@ can:
 - comment on the linked GitHub issue
 - transition the project item to `Done`
 - ignore a PR-linked project item on the same board
+- keep a same-board `Todo` issue blocked until its same-board blocker reaches `Done`
+- keep a `Todo` issue blocked by an off-board blocker until that blocker closes
+- dispatch a higher-priority runnable issue before a lower-priority one when only one slot is available
+- keep `branch_name` as `nil` when a linked issue has multiple linked branches
 
 Prerequisites:
 
 - `GITHUB_TOKEN` must be set with issue and project write access for `BrandByX/overture`
 - `OVERTURE_LIVE_SMOKE=1` must be set to opt into the live smoke path
+- `Overture Sandbox` must include:
+  - the documented `Status` field and `Backlog` holding state
+  - a numeric `Priority` field for the priority-ordering scenario
 
 Run it from this directory:
 

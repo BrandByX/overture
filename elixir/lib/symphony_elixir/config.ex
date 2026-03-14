@@ -117,6 +117,8 @@ defmodule SymphonyElixir.Config do
 
   defp validate_semantics(settings) do
     normalized_tracker_assignee = normalize_tracker_assignee(settings.tracker.assignee)
+    priority_field_name = normalize_optional_string(settings.tracker.priority_field_name)
+    priority_option_map = settings.tracker.priority_option_map
 
     cond do
       is_nil(settings.tracker.kind) ->
@@ -142,6 +144,12 @@ defmodule SymphonyElixir.Config do
 
       settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.status_field_name) ->
         {:error, {:invalid_workflow_config, "tracker.status_field_name must be set for github_projects"}}
+
+      settings.tracker.kind == "github_projects" and priority_field_name == settings.tracker.status_field_name ->
+        {:error, {:invalid_workflow_config, "tracker.priority_field_name must not match tracker.status_field_name"}}
+
+      settings.tracker.kind == "github_projects" and is_nil(priority_field_name) and present_map?(priority_option_map) ->
+        {:error, {:invalid_workflow_config, "tracker.priority_option_map requires tracker.priority_field_name for github_projects"}}
 
       settings.tracker.kind == "github_projects" and normalized_tracker_assignee == "" ->
         {:error, {:invalid_workflow_config, "tracker.assignee must be an explicit GitHub login for github_projects"}}
@@ -173,6 +181,30 @@ defmodule SymphonyElixir.Config do
   end
 
   defp normalize_tracker_assignee(_assignee), do: nil
+
+  # Normalize an optional workflow string setting.
+  #
+  # Trims blank strings to `nil` so semantic validation can distinguish between
+  # unset and present values reliably.
+  #
+  # Returns the trimmed string or `nil`.
+  defp normalize_optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_optional_string(_value), do: nil
+
+  # Detect whether a workflow value is a non-empty map.
+  #
+  # Uses map size so semantic validation can reject empty placeholder maps
+  # without treating `nil` as configured data.
+  #
+  # Returns `true` when the map contains at least one entry.
+  defp present_map?(value) when is_map(value), do: map_size(value) > 0
+  defp present_map?(_value), do: false
 
   defp format_config_error(reason) do
     case reason do

@@ -528,6 +528,26 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "todo issue with closed off-board blocker remains dispatch-eligible" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "ready-closed-blocker",
+      identifier: "MT-1010",
+      title: "Ready after off-board blocker closed",
+      state: "Todo",
+      blocked_by: [%{id: "blocker-closed", identifier: "BrandByX/other#42", state: "CLOSED"}]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do
     stale_issue = %Issue{
       id: "blocked-2",

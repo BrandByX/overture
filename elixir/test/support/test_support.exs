@@ -2,9 +2,9 @@ defmodule SymphonyElixir.TestSupport do
   @workflow_prompt "You are an agent for this repository."
   @default_tracker_active_states ["Todo", "In Progress", "Human Review", "Rework", "Merging"]
   @default_tracker_terminal_states ["Done", "Cancelled", "Duplicate"]
-
   defmodule FakeGitHubProjectsClient do
     @moduledoc false
+    @fake_priority_select_option_names ["P1", "P2", "P3", "P4"]
 
     # Validate tracker config with a deterministic fake board contract.
     #
@@ -26,10 +26,18 @@ defmodule SymphonyElixir.TestSupport do
     #
     # Returns `:ok` or `{:error, reason}`.
     defp validate_field_contract(tracker) do
-      if tracker.status_field_name != "Status" do
-        {:error, {:github_projects_status_field_not_found, tracker.status_field_name}}
-      else
-        validate_state_options(tracker)
+      cond do
+        tracker.status_field_name != "Status" ->
+          {:error, {:github_projects_status_field_not_found, tracker.status_field_name}}
+
+        tracker.priority_field_name == tracker.status_field_name ->
+          {:error, {:invalid_workflow_config, "tracker.priority_field_name must not match tracker.status_field_name"}}
+
+        true ->
+          with :ok <- validate_state_options(tracker),
+               :ok <- validate_priority_field_contract(tracker) do
+            :ok
+          end
       end
     end
 
@@ -63,6 +71,75 @@ defmodule SymphonyElixir.TestSupport do
       case missing_states do
         [] -> :ok
         _ -> {:error, {:github_projects_missing_state_options, missing_states}}
+      end
+    end
+
+    # Validate the fake priority field contract used by config tests.
+    #
+    # Supports one numeric fake field (`Priority`) and one single-select fake
+    # field (`Priority Select`) so config tests can exercise both validation
+    # paths without requiring network access.
+    #
+    # Returns `:ok` or `{:error, reason}`.
+    defp validate_priority_field_contract(tracker) do
+      priority_field_name = tracker.priority_field_name
+      priority_option_map = tracker.priority_option_map || %{}
+
+      cond do
+        is_nil(priority_field_name) and priority_option_map != %{} ->
+          {:error, {:invalid_workflow_config, "tracker.priority_option_map requires tracker.priority_field_name for github_projects"}}
+
+        is_nil(priority_field_name) ->
+          :ok
+
+        priority_field_name == "Priority" and priority_option_map == %{} ->
+          :ok
+
+        priority_field_name == "Priority" ->
+          {:error, {:invalid_workflow_config, "tracker.priority_option_map is only allowed for single-select GitHub priority fields"}}
+
+        priority_field_name == "Priority Select" ->
+          validate_priority_select_map(priority_option_map)
+
+        priority_field_name == "Priority Text" ->
+          {:error, {:github_projects_priority_field_unsupported, priority_field_name, "ProjectV2Field", "TEXT"}}
+
+        true ->
+          {:error, {:github_projects_priority_field_not_found, priority_field_name}}
+      end
+    end
+
+    # Validate a fake single-select priority option map.
+    #
+    # Ensures the configured option names exist and all mapped values remain in
+    # Symphony's supported `1..4` priority range.
+    #
+    # Returns `:ok` or `{:error, reason}`.
+    defp validate_priority_select_map(priority_option_map) do
+      cond do
+        priority_option_map == %{} ->
+          {:error, {:invalid_workflow_config, "tracker.priority_option_map is required for single-select GitHub priority fields"}}
+
+        true ->
+          missing_option_names =
+            priority_option_map
+            |> Map.keys()
+            |> Enum.reject(&(&1 in @fake_priority_select_option_names))
+
+          invalid_priorities =
+            priority_option_map
+            |> Enum.reject(fn {_option_name, priority} -> is_integer(priority) and priority in 1..4 end)
+
+          cond do
+            missing_option_names != [] ->
+              {:error, {:github_projects_missing_priority_options, missing_option_names}}
+
+            invalid_priorities != [] ->
+              {:error, {:invalid_workflow_config, "tracker.priority_option_map values must be integers in 1..4"}}
+
+            true ->
+              :ok
+          end
       end
     end
   end
@@ -186,6 +263,8 @@ defmodule SymphonyElixir.TestSupport do
           tracker_project_number: 6,
           tracker_repository: "BrandByX/overture",
           tracker_status_field_name: "Status",
+          tracker_priority_field_name: nil,
+          tracker_priority_option_map: nil,
           tracker_assignee: nil,
           tracker_active_states: @default_tracker_active_states,
           tracker_terminal_states: @default_tracker_terminal_states,
@@ -226,6 +305,8 @@ defmodule SymphonyElixir.TestSupport do
     tracker_project_number = Keyword.get(config, :tracker_project_number)
     tracker_repository = Keyword.get(config, :tracker_repository)
     tracker_status_field_name = Keyword.get(config, :tracker_status_field_name)
+    tracker_priority_field_name = Keyword.get(config, :tracker_priority_field_name)
+    tracker_priority_option_map = Keyword.get(config, :tracker_priority_option_map)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
@@ -267,6 +348,8 @@ defmodule SymphonyElixir.TestSupport do
         "  project_number: #{yaml_value(tracker_project_number)}",
         "  repository: #{yaml_value(tracker_repository)}",
         "  status_field_name: #{yaml_value(tracker_status_field_name)}",
+        "  priority_field_name: #{yaml_value(tracker_priority_field_name)}",
+        "  priority_option_map: #{yaml_value(tracker_priority_option_map)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",

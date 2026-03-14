@@ -126,16 +126,83 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
     assert second_payload["variables"][:after] == "cursor-1"
   end
 
-  test "fetch_candidate_issues queries only the configured owner branch for project contract lookup" do
-    organization_tracker = %{Config.settings!().tracker | owner_type: "organization", owner_login: "BrandByX"}
-    user_tracker = %{Config.settings!().tracker | owner_type: "user", owner_login: "sidney"}
+  test "verify_schema_contract validates the live close-reason schema surface" do
+    tracker = Config.settings!().tracker
 
-    organization_request_fun = fn payload, _headers ->
-      send(self(), {:organization_request, payload["operationName"], payload})
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
+      {:ok, %{status: 200, body: schema_contract_response()}}
+    end
+
+    assert :ok = Client.verify_schema_contract_for_test(tracker, request_fun)
+
+    assert_received {:github_request, "OvertureGitHubSchemaContract", payload}
+    assert payload["query"] =~ "CloseIssueInput"
+    assert payload["query"] =~ "IssueClosedStateReason"
+  end
+
+  test "fetch_candidate_issues paginates project fields until status and numeric priority fields are found" do
+    tracker = %{Config.settings!().tracker | priority_field_name: "Priority"}
+
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
+
+      case {payload["operationName"], payload["variables"][:after]} do
+        {"OvertureProjectFieldContract", nil} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_contract_response(
+                 [status_field()],
+                 has_next_page: true,
+                 end_cursor: "cursor-1"
+               )
+           }}
+
+        {"OvertureProjectFieldContract", "cursor-1"} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_contract_response(
+                 [priority_number_field()],
+                 has_next_page: false,
+                 end_cursor: nil
+               )
+           }}
+
+        {"OvertureProjectItems", _cursor} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_items_response([
+                 issue_item("project-item-1", "Todo",
+                   issue: issue_node("issue-node-1", 151, assignees: ["sidney"]),
+                   priority_field_value: priority_number_value(2)
+                 )
+               ])
+           }}
+      end
+    end
+
+    assert {:ok, [%Issue{} = issue]} = Client.fetch_candidate_issues_for_test(tracker, request_fun)
+    assert issue.priority == 2
+
+    assert_received {:github_request, "OvertureProjectItems", payload}
+    assert payload["variables"][:priorityFieldName] == "Priority"
+  end
+
+  test "fetch_candidate_issues normalizes numeric priority, linked branch metadata, and same-board blockers" do
+    tracker = %{Config.settings!().tracker | priority_field_name: "Priority"}
+
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
 
       case payload["operationName"] do
         "OvertureProjectFieldContract" ->
-          {:ok, %{status: 200, body: project_contract_response([status_field()], owner_type: "organization")}}
+          {:ok, %{status: 200, body: project_contract_response([status_field(), priority_number_field()])}}
 
         "OvertureProjectItems" ->
           {:ok,
@@ -143,18 +210,47 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
              status: 200,
              body:
                project_items_response([
-                 issue_item("project-item-1", "Todo", issue: issue_node("issue-node-1", 161, assignees: ["sidney"]))
+                 issue_item("project-item-1", "Todo",
+                   issue:
+                     issue_node("issue-node-1", 801,
+                       assignees: ["sidney"],
+                       blockers: [blocker_node("blocker-1", 802)],
+                       linked_branches: [%{"id" => "linked-branch-1", "ref" => %{"id" => "ref-1", "name" => "feature/issue-801"}}]
+                     ),
+                   priority_field_value: priority_number_value(1)
+                 )
+               ])
+           }}
+
+        "OvertureBlockerProjectItems" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               blocker_project_items_response([
+                 blocker_issue_state_node("blocker-1",
+                   state: "OPEN",
+                   project_items: [blocker_project_item("In Progress")]
+                 )
                ])
            }}
       end
     end
 
-    user_request_fun = fn payload, _headers ->
-      send(self(), {:user_request, payload["operationName"], payload})
+    assert {:ok, [%Issue{} = issue]} = Client.fetch_candidate_issues_for_test(tracker, request_fun)
 
+    assert issue.priority == 1
+    assert issue.branch_name == "feature/issue-801"
+    assert issue.blocked_by == [%{id: "blocker-1", identifier: "BrandByX/overture#802", state: "In Progress"}]
+  end
+
+  test "fetch_candidate_issues falls back to CLOSED for off-board blockers" do
+    tracker = Config.settings!().tracker
+
+    request_fun = fn payload, _headers ->
       case payload["operationName"] do
         "OvertureProjectFieldContract" ->
-          {:ok, %{status: 200, body: project_contract_response([status_field()], owner_type: "user")}}
+          {:ok, %{status: 200, body: project_contract_response()}}
 
         "OvertureProjectItems" ->
           {:ok,
@@ -162,25 +258,60 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
              status: 200,
              body:
                project_items_response([
-                 issue_item("project-item-2", "Todo", issue: issue_node("issue-node-2", 162, assignees: ["sidney"]))
+                 issue_item("project-item-1", "Todo", issue: issue_node("issue-node-1", 901, blockers: [blocker_node("blocker-1", 902, state: "CLOSED")]))
+               ])
+           }}
+
+        "OvertureBlockerProjectItems" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               blocker_project_items_response([
+                 blocker_issue_state_node("blocker-1", state: "CLOSED", project_items: [])
                ])
            }}
       end
     end
 
-    assert {:ok, [%Issue{id: "project-item-1"}]} =
-             Client.fetch_candidate_issues_for_test(organization_tracker, organization_request_fun)
+    assert {:ok, [%Issue{} = issue]} = Client.fetch_candidate_issues_for_test(tracker, request_fun)
+    assert issue.blocked_by == [%{id: "blocker-1", identifier: "BrandByX/overture#902", state: "CLOSED"}]
+  end
 
-    assert_received {:organization_request, "OvertureProjectFieldContract", organization_payload}
-    assert organization_payload["query"] =~ "organization(login: $ownerLogin)"
-    refute organization_payload["query"] =~ "user(login: $ownerLogin)"
+  test "fetch_candidate_issues skips issues whose same-board blocker status is unreadable" do
+    tracker = Config.settings!().tracker
 
-    assert {:ok, [%Issue{id: "project-item-2"}]} =
-             Client.fetch_candidate_issues_for_test(user_tracker, user_request_fun)
+    request_fun = fn payload, _headers ->
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: project_contract_response()}}
 
-    assert_received {:user_request, "OvertureProjectFieldContract", user_payload}
-    assert user_payload["query"] =~ "user(login: $ownerLogin)"
-    refute user_payload["query"] =~ "organization(login: $ownerLogin)"
+        "OvertureProjectItems" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_items_response([
+                 issue_item("project-item-1", "Todo", issue: issue_node("issue-node-1", 951, blockers: [blocker_node("blocker-1", 952)]))
+               ])
+           }}
+
+        "OvertureBlockerProjectItems" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               blocker_project_items_response([
+                 blocker_issue_state_node("blocker-1",
+                   state: "OPEN",
+                   project_items: [%{"project" => %{"id" => "project-node-1"}, "fieldValueByName" => nil}]
+                 )
+               ])
+           }}
+      end
+    end
+
+    assert {:ok, []} = Client.fetch_candidate_issues_for_test(tracker, request_fun)
   end
 
   test "fetch_issues_by_states ignores assignee routing so cleanup can see all matching items" do
@@ -341,6 +472,7 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
     assert_received {:github_request, "OvertureCloseIssue", close_payload}
     assert close_payload["variables"][:contentId] == "issue-node-dup"
     assert close_payload["variables"][:stateReason] == "DUPLICATE"
+    assert close_payload["query"] =~ "IssueClosedStateReason"
   end
 
   test "update_issue_state reopens closed issues when moving into an active workflow state" do
@@ -381,41 +513,20 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
   defp project_contract_response(fields \\ [status_field()], opts \\ []) do
     has_next_page = Keyword.get(opts, :has_next_page, false)
     end_cursor = Keyword.get(opts, :end_cursor)
-    owner_type = Keyword.get(opts, :owner_type, "organization")
-
-    data =
-      case owner_type do
-        "organization" ->
-          %{
-            "organization" => %{
-              "projectV2" => %{
-                "id" => "project-node-1",
-                "fields" => %{
-                  "nodes" => fields,
-                  "pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}
-                }
-              }
-            },
-            "user" => nil
-          }
-
-        "user" ->
-          %{
-            "organization" => nil,
-            "user" => %{
-              "projectV2" => %{
-                "id" => "project-node-1",
-                "fields" => %{
-                  "nodes" => fields,
-                  "pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}
-                }
-              }
-            }
-          }
-      end
 
     %{
-      "data" => data
+      "data" => %{
+        "organization" => %{
+          "projectV2" => %{
+            "id" => "project-node-1",
+            "fields" => %{
+              "nodes" => fields,
+              "pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}
+            }
+          }
+        },
+        "user" => nil
+      }
     }
   end
 
@@ -435,6 +546,15 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
         %{"id" => "option-cancelled", "name" => "Cancelled"},
         %{"id" => "option-duplicate", "name" => "Duplicate"}
       ]
+    }
+  end
+
+  defp priority_number_field do
+    %{
+      "__typename" => "ProjectV2Field",
+      "id" => "priority-field-1",
+      "name" => "Priority",
+      "dataType" => "NUMBER"
     }
   end
 
@@ -509,6 +629,7 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
         "name" => state_name,
         "optionId" => "option-#{state_name |> String.downcase() |> String.replace(" ", "-")}"
       },
+      "priorityFieldValue" => Keyword.get(attrs, :priority_field_value),
       "content" => Keyword.fetch!(attrs, :issue)
     }
   end
@@ -547,6 +668,8 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
     labels = Keyword.get(attrs, :labels, [])
     state = Keyword.get(attrs, :state, "OPEN")
     state_reason = Keyword.get(attrs, :state_reason)
+    blockers = Keyword.get(attrs, :blockers, [])
+    linked_branches = Keyword.get(attrs, :linked_branches, [])
 
     %{
       "__typename" => "Issue",
@@ -560,8 +683,88 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
       "repository" => %{"nameWithOwner" => repository},
       "assignees" => %{"nodes" => Enum.map(assignees, &%{"login" => &1})},
       "labels" => %{"nodes" => Enum.map(labels, &%{"name" => &1})},
+      "blockedBy" => %{
+        "nodes" => blockers,
+        "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil},
+        "totalCount" => length(blockers)
+      },
+      "linkedBranches" => %{"nodes" => linked_branches, "totalCount" => length(linked_branches)},
       "createdAt" => "2026-03-13T16:00:00Z",
       "updatedAt" => "2026-03-13T17:00:00Z"
+    }
+  end
+
+  defp blocker_node(issue_id, issue_number, attrs \\ []) do
+    repository = Keyword.get(attrs, :repository, "BrandByX/overture")
+    state = Keyword.get(attrs, :state, "OPEN")
+
+    %{
+      "id" => issue_id,
+      "number" => issue_number,
+      "state" => state,
+      "repository" => %{"nameWithOwner" => repository}
+    }
+  end
+
+  defp blocker_project_items_response(nodes) do
+    %{"data" => %{"nodes" => nodes}}
+  end
+
+  defp blocker_issue_state_node(issue_id, attrs) do
+    project_items = Keyword.get(attrs, :project_items, [])
+    state = Keyword.get(attrs, :state, "OPEN")
+
+    %{
+      "__typename" => "Issue",
+      "id" => issue_id,
+      "state" => state,
+      "projectItems" => %{
+        "nodes" => project_items,
+        "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+      }
+    }
+  end
+
+  defp blocker_project_item(status_name) do
+    %{
+      "project" => %{"id" => "project-node-1"},
+      "fieldValueByName" => %{
+        "__typename" => "ProjectV2ItemFieldSingleSelectValue",
+        "name" => status_name,
+        "optionId" => "option-#{status_name |> String.downcase() |> String.replace(" ", "-")}"
+      }
+    }
+  end
+
+  defp priority_number_value(number) do
+    %{"__typename" => "ProjectV2ItemFieldNumberValue", "number" => number}
+  end
+
+  defp schema_contract_response do
+    %{
+      "data" => %{
+        "issueType" => %{
+          "fields" => [
+            %{
+              "name" => "stateReason",
+              "args" => [%{"name" => "enableDuplicate"}]
+            }
+          ]
+        },
+        "closeIssueInputType" => %{
+          "inputFields" => [
+            %{"name" => "issueId", "type" => %{"name" => nil, "kind" => "NON_NULL", "ofType" => %{"name" => "ID", "kind" => "SCALAR"}}},
+            %{"name" => "stateReason", "type" => %{"name" => "IssueClosedStateReason", "kind" => "ENUM", "ofType" => nil}}
+          ]
+        },
+        "issueClosedStateReasonType" => %{
+          "enumValues" => [
+            %{"name" => "COMPLETED"},
+            %{"name" => "NOT_PLANNED"},
+            %{"name" => "DUPLICATE"}
+          ]
+        }
+      }
     }
   end
 end

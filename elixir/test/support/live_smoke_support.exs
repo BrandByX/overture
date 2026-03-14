@@ -19,6 +19,7 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   @repository_name "overture"
   @project_number 5
   @status_field_name "Status"
+  @priority_field_name "Priority"
   @issue_title_prefix "Overture live smoke "
   @field_page_size 50
   @item_page_size 100
@@ -45,6 +46,9 @@ defmodule SymphonyElixir.LiveSmokeSupport do
               id
               name
             }
+            ... on ProjectV2Field {
+              dataType
+            }
             ... on ProjectV2SingleSelectField {
               options {
                 id
@@ -57,6 +61,15 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     }
     repository(owner: $ownerLogin, name: $repositoryName) {
       id
+      defaultBranchRef {
+        name
+        target {
+          __typename
+          ... on Commit {
+            oid
+          }
+        }
+      }
       pullRequests(first: $pullRequestFirst, orderBy: {field: UPDATED_AT, direction: DESC}) {
         nodes {
           id
@@ -163,6 +176,79 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     }
   }
   """
+  @add_blocker_mutation """
+  mutation OvertureLiveSmokeAddBlockedBy($issueId: ID!, $blockingIssueId: ID!) {
+    addBlockedBy(input: {issueId: $issueId, blockingIssueId: $blockingIssueId}) {
+      issue {
+        id
+      }
+    }
+  }
+  """
+  @remove_blocker_mutation """
+  mutation OvertureLiveSmokeRemoveBlockedBy($issueId: ID!, $blockingIssueId: ID!) {
+    removeBlockedBy(input: {issueId: $issueId, blockingIssueId: $blockingIssueId}) {
+      issue {
+        id
+      }
+    }
+  }
+  """
+  @update_number_field_mutation """
+  mutation OvertureLiveSmokeUpdateNumberField(
+    $projectId: ID!,
+    $itemId: ID!,
+    $fieldId: ID!,
+    $number: Float!
+  ) {
+    updateProjectV2ItemFieldValue(
+      input: {
+        projectId: $projectId,
+        itemId: $itemId,
+        fieldId: $fieldId,
+        value: {number: $number}
+      }
+    ) {
+      projectV2Item {
+        id
+      }
+    }
+  }
+  """
+  @create_linked_branch_mutation """
+  mutation OvertureLiveSmokeCreateLinkedBranch(
+    $issueId: ID!,
+    $repositoryId: ID!,
+    $oid: GitObjectID!,
+    $name: String!
+  ) {
+    createLinkedBranch(
+      input: {issueId: $issueId, repositoryId: $repositoryId, oid: $oid, name: $name}
+    ) {
+      linkedBranch {
+        id
+        ref {
+          id
+          name
+        }
+      }
+    }
+  }
+  """
+  @delete_linked_branch_mutation """
+  mutation OvertureLiveSmokeDeleteLinkedBranch($linkedBranchId: ID!) {
+    deleteLinkedBranch(input: {linkedBranchId: $linkedBranchId}) {
+      clientMutationId
+    }
+  }
+  """
+  @delete_ref_mutation """
+  mutation OvertureLiveSmokeDeleteRef($refId: ID!) {
+    deleteRef(input: {refId: $refId}) {
+      clientMutationId
+    }
+  }
+  """
   @close_issue_mutation """
   mutation OvertureLiveSmokeCloseIssue($issueId: ID!) {
     closeIssue(input: {issueId: $issueId, stateReason: COMPLETED}) {
@@ -188,6 +274,28 @@ defmodule SymphonyElixir.LiveSmokeSupport do
         comments(last: 20) {
           nodes {
             body
+          }
+        }
+      }
+    }
+  }
+  """
+  @issue_linked_branches_query """
+  query OvertureLiveSmokeIssueLinkedBranches(
+    $ownerLogin: String!,
+    $repositoryName: String!,
+    $issueNumber: Int!
+  ) {
+    repository(owner: $ownerLogin, name: $repositoryName) {
+      issue(number: $issueNumber) {
+        id
+        linkedBranches(first: 20) {
+          nodes {
+            id
+            ref {
+              id
+              name
+            }
           }
         }
       }
@@ -245,6 +353,42 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   """
   @spec create_context!() :: map()
   def create_context! do
+    runtime_context = create_runtime_context!()
+    issue_fixture = create_issue_fixture!(runtime_context, run_id: runtime_context.run_id)
+    pr_fixture = ensure_pr_fixture!(runtime_context.tracker, runtime_context.bootstrap)
+
+    write_fake_codex!(
+      runtime_context.codex_binary,
+      runtime_context.trace_file,
+      runtime_context.marker_content,
+      issue_fixture,
+      runtime_context.bootstrap.status_field,
+      runtime_context.bootstrap.project_id
+    )
+
+    issue_identifier = "#{@repository}##{issue_fixture.number}"
+    workspace_path = Path.join(runtime_context.workspace_root, safe_identifier(issue_identifier))
+    marker_file = Path.join(workspace_path, @marker_file_name)
+
+    Map.merge(runtime_context, %{
+      workspace_path: workspace_path,
+      marker_file: marker_file,
+      issue: issue_fixture,
+      pr_item: pr_fixture
+    })
+  end
+
+  @doc """
+  Create the reusable live smoke runtime context without tracker fixtures.
+
+  Prepares the sandbox tracker metadata, temporary workspace root, and both the
+  deterministic "complete work" fake Codex binary and a holding app-server
+  binary used by blocker and priority smoke scenarios.
+
+  Returns a context map with bootstrap metadata and local runtime paths.
+  """
+  @spec create_runtime_context!() :: map()
+  def create_runtime_context! do
     tracker = tracker()
     bootstrap = fetch_bootstrap!(tracker)
     cleanup_stale_issue_items!(tracker, bootstrap)
@@ -255,23 +399,11 @@ defmodule SymphonyElixir.LiveSmokeSupport do
 
     File.mkdir_p!(workspace_root)
 
-    issue_fixture = create_issue_fixture!(tracker, bootstrap, run_id)
-    pr_fixture = ensure_pr_fixture!(tracker, bootstrap)
     codex_binary = Path.join(test_root, "fake-codex")
+    hold_codex_binary = Path.join(test_root, "hold-codex")
     marker_content = "overture-live-smoke-run=#{run_id}"
 
-    write_fake_codex!(
-      codex_binary,
-      trace_file,
-      marker_content,
-      issue_fixture,
-      bootstrap.status_field,
-      bootstrap.project_id
-    )
-
-    issue_identifier = "#{@repository}##{issue_fixture.number}"
-    workspace_path = Path.join(workspace_root, safe_identifier(issue_identifier))
-    marker_file = Path.join(workspace_path, @marker_file_name)
+    write_hold_codex!(hold_codex_binary, trace_file)
 
     %{
       run_id: run_id,
@@ -279,14 +411,26 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       test_root: test_root,
       trace_file: trace_file,
       workspace_root: workspace_root,
-      workspace_path: workspace_path,
-      marker_file: marker_file,
       marker_content: marker_content,
       codex_binary: codex_binary,
-      bootstrap: bootstrap,
-      issue: issue_fixture,
-      pr_item: pr_fixture
+      hold_codex_binary: hold_codex_binary,
+      bootstrap: bootstrap
     }
+  end
+
+  @doc """
+  Remove the local temporary runtime assets for a live smoke context.
+
+  Use this when a smoke scenario provisions its own tracker fixtures and only
+  needs the temporary workspace root, trace file, and fake Codex binaries
+  cleaned up afterward.
+
+  Returns `:ok`.
+  """
+  @spec cleanup_runtime!(map()) :: :ok
+  def cleanup_runtime!(context) when is_map(context) do
+    File.rm_rf(context.test_root)
+    :ok
   end
 
   @doc """
@@ -312,10 +456,386 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       tracker_terminal_states: @terminal_states,
       workspace_root: context.workspace_root,
       codex_command: "#{shell_escape(context.codex_binary)} app-server",
-      poll_interval_ms: 30_000,
+      poll_interval_ms: 250,
+      max_concurrent_agents: 1,
       max_turns: 1,
       prompt: live_smoke_prompt(context)
     ]
+  end
+
+  @doc """
+  Verify the live GitHub schema contract before running smoke scenarios.
+
+  Uses the configured workflow-backed client path so live smoke fails clearly
+  when GitHub changes the read or close mutation schema Overture depends on.
+
+  Returns `:ok`.
+  """
+  @spec verify_schema_contract!() :: :ok
+  def verify_schema_contract! do
+    case Client.verify_schema_contract() do
+      :ok -> :ok
+      {:error, reason} -> raise "Live smoke schema verification failed: #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  Create one disposable issue fixture for a live smoke scenario.
+
+  Creates the repository issue, optionally adds it to the sandbox board, sets
+  the requested workflow state, and optionally applies a numeric priority.
+
+  Returns issue fixture metadata.
+  """
+  @spec create_issue_fixture!(map(), keyword()) :: map()
+  def create_issue_fixture!(context, opts \\ []) when is_map(context) and is_list(opts) do
+    run_id = Keyword.get(opts, :run_id, context.run_id)
+    title_prefix = Keyword.get(opts, :title_prefix, @issue_title_prefix)
+    status_name = Keyword.get(opts, :status_name, "Todo")
+    add_to_project? = Keyword.get(opts, :add_to_project?, true)
+    priority = Keyword.get(opts, :priority)
+    title = String.trim("#{title_prefix} #{run_id}")
+    body = Keyword.get(opts, :body, issue_body(run_id))
+    comment_marker = Keyword.get(opts, :comment_marker, "Overture live smoke comment #{run_id}")
+
+    issue_response =
+      graphql!(
+        context.tracker,
+        @create_issue_mutation,
+        %{repositoryId: context.bootstrap.repository_id, title: title, body: body},
+        operation_name: "OvertureLiveSmokeCreateIssue"
+      )
+
+    issue = get_in(issue_response, ["data", "createIssue", "issue"]) || %{}
+
+    item_id =
+      if add_to_project? do
+        add_project_item!(context.tracker, context.bootstrap.project_id, issue["id"])
+      else
+        nil
+      end
+
+    fixture = %{
+      issue_id: issue["id"],
+      item_id: item_id,
+      number: issue["number"],
+      url: issue["url"],
+      identifier: "#{@repository}##{issue["number"]}",
+      comment_marker: comment_marker
+    }
+
+    if is_binary(item_id) do
+      :ok = set_issue_status!(context, fixture, status_name)
+    end
+
+    if not is_nil(priority) do
+      :ok = set_issue_priority!(context, fixture, priority)
+    end
+
+    fixture
+  end
+
+  @doc """
+  Remove one disposable issue fixture from the sandbox and repository.
+
+  Closes the linked issue if needed and deletes the sandbox project item when
+  the fixture was added to the board.
+
+  Returns `:ok`.
+  """
+  @spec cleanup_issue_fixture!(map(), map()) :: :ok
+  def cleanup_issue_fixture!(context, fixture) when is_map(context) and is_map(fixture) do
+    maybe_close_issue(context.tracker, fixture.issue_id)
+    maybe_delete_project_item(context.tracker, context.bootstrap.project_id, fixture.item_id)
+    :ok
+  end
+
+  @doc """
+  Update one issue-backed sandbox item to the requested workflow state.
+
+  Requires the fixture to have a project item on the sandbox board.
+
+  Returns `:ok`.
+  """
+  @spec set_issue_status!(map(), map(), String.t()) :: :ok
+  def set_issue_status!(context, fixture, status_name)
+      when is_map(context) and is_map(fixture) and is_binary(status_name) do
+    option_id = context.bootstrap.status_field.option_ids_by_name[status_name]
+
+    cond do
+      not is_binary(fixture.item_id) ->
+        raise "Live smoke issue fixture #{fixture.identifier} is not on the sandbox board."
+
+      not is_binary(option_id) ->
+        raise "Live smoke status option #{inspect(status_name)} was not found on the sandbox board."
+
+      true ->
+        update_project_item_status!(
+          context.tracker,
+          context.bootstrap.project_id,
+          fixture.item_id,
+          context.bootstrap.status_field.id,
+          option_id
+        )
+    end
+  end
+
+  @doc """
+  Update one issue-backed sandbox item to the requested numeric priority.
+
+  Requires the sandbox board to expose the configured numeric `Priority` field.
+
+  Returns `:ok`.
+  """
+  @spec set_issue_priority!(map(), map(), integer()) :: :ok
+  def set_issue_priority!(context, fixture, priority)
+      when is_map(context) and is_map(fixture) and is_integer(priority) do
+    priority_field = require_priority_field!(context.bootstrap)
+
+    cond do
+      not is_binary(fixture.item_id) ->
+        raise "Live smoke issue fixture #{fixture.identifier} is not on the sandbox board."
+
+      true ->
+        item_id = fixture.item_id
+
+        response =
+          graphql!(
+            context.tracker,
+            @update_number_field_mutation,
+            %{
+              projectId: context.bootstrap.project_id,
+              itemId: item_id,
+              fieldId: priority_field.id,
+              number: priority * 1.0
+            },
+            operation_name: "OvertureLiveSmokeUpdateNumberField"
+          )
+
+        case get_in(response, ["data", "updateProjectV2ItemFieldValue", "projectV2Item", "id"]) do
+          ^item_id -> :ok
+          _ -> raise "Failed to update the live smoke numeric priority field."
+        end
+    end
+  end
+
+  @doc """
+  Add one blocker dependency between two live smoke issues.
+
+  The dependent and blocker are identified by their linked GitHub issue node
+  IDs, not by project item IDs.
+
+  Returns `:ok`.
+  """
+  @spec add_blocker!(map(), map(), map()) :: :ok
+  def add_blocker!(context, dependent_fixture, blocker_fixture)
+      when is_map(context) and is_map(dependent_fixture) and is_map(blocker_fixture) do
+    response =
+      graphql!(
+        context.tracker,
+        @add_blocker_mutation,
+        %{issueId: dependent_fixture.issue_id, blockingIssueId: blocker_fixture.issue_id},
+        operation_name: "OvertureLiveSmokeAddBlockedBy"
+      )
+
+    case get_in(response, ["data", "addBlockedBy", "issue", "id"]) do
+      issue_id when issue_id == dependent_fixture.issue_id -> :ok
+      _ -> raise "Failed to add the live smoke blocker relationship."
+    end
+  end
+
+  @doc """
+  Remove one blocker dependency between two live smoke issues.
+
+  Returns `:ok`.
+  """
+  @spec remove_blocker!(map(), map(), map()) :: :ok
+  def remove_blocker!(context, dependent_fixture, blocker_fixture)
+      when is_map(context) and is_map(dependent_fixture) and is_map(blocker_fixture) do
+    response =
+      graphql!(
+        context.tracker,
+        @remove_blocker_mutation,
+        %{issueId: dependent_fixture.issue_id, blockingIssueId: blocker_fixture.issue_id},
+        operation_name: "OvertureLiveSmokeRemoveBlockedBy"
+      )
+
+    case get_in(response, ["data", "removeBlockedBy", "issue", "id"]) do
+      issue_id when issue_id == dependent_fixture.issue_id -> :ok
+      _ -> raise "Failed to remove the live smoke blocker relationship."
+    end
+  end
+
+  @doc """
+  Close one disposable live smoke issue.
+
+  Uses the same close-reason semantics the runtime expects from GitHub.
+
+  Returns `:ok`.
+  """
+  @spec close_issue!(map(), map()) :: :ok
+  def close_issue!(context, fixture) when is_map(context) and is_map(fixture) do
+    maybe_close_issue(context.tracker, fixture.issue_id)
+  end
+
+  @doc """
+  Create one linked branch for the provided live smoke issue.
+
+  Uses the sandbox repository default-branch commit OID as the base commit and
+  returns the created linked-branch metadata needed for cleanup.
+
+  Returns a map with linked-branch and ref IDs.
+  """
+  @spec create_linked_branch!(map(), map(), String.t()) :: map()
+  def create_linked_branch!(context, fixture, branch_name)
+      when is_map(context) and is_map(fixture) and is_binary(branch_name) do
+    base_oid = require_default_branch_oid!(context.bootstrap)
+
+    response =
+      graphql!(
+        context.tracker,
+        @create_linked_branch_mutation,
+        %{
+          issueId: fixture.issue_id,
+          repositoryId: context.bootstrap.repository_id,
+          oid: base_oid,
+          name: branch_name
+        },
+        operation_name: "OvertureLiveSmokeCreateLinkedBranch"
+      )
+
+    case get_in(response, ["data", "createLinkedBranch", "linkedBranch"]) do
+      %{"id" => linked_branch_id} = linked_branch when is_binary(linked_branch_id) ->
+        %{
+          linked_branch_id: linked_branch_id,
+          ref_id: get_in(linked_branch, ["ref", "id"]),
+          ref_name: get_in(linked_branch, ["ref", "name"])
+        }
+
+      _ ->
+        raise "Failed to create the live smoke linked branch."
+    end
+  end
+
+  @doc """
+  Refetch the linked branches for one live smoke issue.
+
+  Use this when GitHub omits branch ref IDs in the create mutation response and
+  cleanup needs concrete `linkedBranch.id` and `ref.id` values.
+
+  Returns a list of linked-branch metadata maps.
+  """
+  @spec refetch_linked_branches!(map(), map()) :: [map()]
+  def refetch_linked_branches!(context, fixture) when is_map(context) and is_map(fixture) do
+    response =
+      graphql!(
+        context.tracker,
+        @issue_linked_branches_query,
+        %{
+          ownerLogin: @owner_login,
+          repositoryName: @repository_name,
+          issueNumber: fixture.number
+        },
+        operation_name: "OvertureLiveSmokeIssueLinkedBranches"
+      )
+
+    response
+    |> get_in(["data", "repository", "issue", "linkedBranches", "nodes"])
+    |> List.wrap()
+    |> Enum.map(fn linked_branch ->
+      %{
+        linked_branch_id: linked_branch["id"],
+        ref_id: get_in(linked_branch, ["ref", "id"]),
+        ref_name: get_in(linked_branch, ["ref", "name"])
+      }
+    end)
+  end
+
+  @doc """
+  Remove one linked branch from both the issue and the repository.
+
+  Unlinks the branch from the issue first, then deletes the underlying Git
+  ref. If the ref ID is unavailable, callers should refetch linked branches
+  before cleanup.
+
+  Returns `:ok`.
+  """
+  @spec cleanup_linked_branch!(map(), map()) :: :ok
+  def cleanup_linked_branch!(context, linked_branch)
+      when is_map(context) and is_map(linked_branch) do
+    delete_linked_branch!(context.tracker, linked_branch.linked_branch_id)
+
+    case linked_branch.ref_id do
+      ref_id when is_binary(ref_id) ->
+        delete_ref!(context.tracker, ref_id)
+
+      _ ->
+        raise "Live smoke linked branch cleanup requires a repository ref ID."
+    end
+  end
+
+  @doc """
+  Fetch the live sandbox candidate issues through the production tracker client.
+
+  Uses the current workflow-backed configuration so smoke assertions exercise
+  the same normalization path as the runtime poller.
+
+  Returns the normalized issue list.
+  """
+  @spec fetch_candidate_issues!() :: [map()]
+  def fetch_candidate_issues! do
+    case Client.fetch_candidate_issues() do
+      {:ok, issues} -> issues
+      {:error, reason} -> raise "Live smoke candidate fetch failed: #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  Wait until the orchestrator claims one specific project item.
+
+  Polls the in-memory orchestrator state and returns the claimed item ID once
+  the requested issue enters the running set.
+
+  Returns the claimed project item ID.
+  """
+  @spec wait_for_claimed_issue!(pid(), String.t(), keyword()) :: String.t()
+  def wait_for_claimed_issue!(orchestrator_pid, issue_id, opts \\ [])
+      when is_pid(orchestrator_pid) and is_binary(issue_id) and is_list(opts) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, 10_000)
+    interval_ms = Keyword.get(opts, :interval_ms, 100)
+
+    wait_until!(
+      fn ->
+        state = :sys.get_state(orchestrator_pid)
+
+        cond do
+          Map.has_key?(state.running, issue_id) -> issue_id
+          MapSet.member?(state.claimed, issue_id) -> issue_id
+          true -> false
+        end
+      end,
+      timeout_ms,
+      interval_ms,
+      "Timed out waiting for the live smoke orchestrator to claim #{issue_id}."
+    )
+  end
+
+  @doc """
+  Assert that the orchestrator does not claim one project item for a duration.
+
+  This is used by blocker smoke scenarios to prove the runtime kept the issue
+  non-runnable until the blocker terminality changed.
+
+  Returns `:ok`.
+  """
+  @spec assert_issue_unclaimed!(pid(), String.t(), keyword()) :: :ok
+  def assert_issue_unclaimed!(orchestrator_pid, issue_id, opts \\ [])
+      when is_pid(orchestrator_pid) and is_binary(issue_id) and is_list(opts) do
+    duration_ms = Keyword.get(opts, :duration_ms, 1_500)
+    interval_ms = Keyword.get(opts, :interval_ms, 100)
+    started_at = System.monotonic_time(:millisecond)
+
+    do_assert_issue_unclaimed!(orchestrator_pid, issue_id, started_at, duration_ms, interval_ms)
   end
 
   @doc """
@@ -486,16 +1006,22 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     project = get_in(response, ["data", "organization", "projectV2"]) || %{}
     repository = get_in(response, ["data", "repository"]) || %{}
     status_field = project_status_field!(project)
+    priority_field = project_priority_field(project)
     repository_pull_requests = get_in(repository, ["pullRequests", "nodes"]) |> List.wrap()
     project_items = fetch_project_items!(tracker, project["id"])
+    default_branch_oid = get_in(repository, ["defaultBranchRef", "target", "oid"])
+    default_branch_name = get_in(repository, ["defaultBranchRef", "name"])
 
     %{
       project_id: project["id"],
       repository_id: repository["id"],
       status_field: status_field,
+      priority_field: priority_field,
       project_issue_items: project_issue_items(project_items),
       project_pull_request_items: project_pull_request_items(project_items),
-      repository_pull_requests: repository_pull_requests
+      repository_pull_requests: repository_pull_requests,
+      default_branch_oid: default_branch_oid,
+      default_branch_name: default_branch_name
     }
   end
 
@@ -568,41 +1094,6 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       true ->
         updated_items
     end
-  end
-
-  # Create a disposable issue and add it to the sandbox board.
-  #
-  # The issue-backed item is the runnable work item used by the smoke run and
-  # is initialized in `Todo`.
-  #
-  # Returns issue fixture metadata.
-  defp create_issue_fixture!(tracker, bootstrap, run_id) do
-    title = "Overture live smoke #{run_id}"
-    body = issue_body(run_id)
-
-    issue_response =
-      graphql!(tracker, @create_issue_mutation, %{repositoryId: bootstrap.repository_id, title: title, body: body}, operation_name: "OvertureLiveSmokeCreateIssue")
-
-    issue = get_in(issue_response, ["data", "createIssue", "issue"]) || %{}
-    item_id = add_project_item!(tracker, bootstrap.project_id, issue["id"])
-
-    :ok =
-      update_project_item_status!(
-        tracker,
-        bootstrap.project_id,
-        item_id,
-        bootstrap.status_field.id,
-        bootstrap.status_field.option_ids_by_name["Todo"]
-      )
-
-    %{
-      issue_id: issue["id"],
-      item_id: item_id,
-      number: issue["number"],
-      url: issue["url"],
-      identifier: "#{@repository}##{issue["number"]}",
-      comment_marker: "Overture live smoke comment #{run_id}"
-    }
   end
 
   # Ensure a PR-backed item is present for non-runnable coverage.
@@ -797,6 +1288,64 @@ defmodule SymphonyElixir.LiveSmokeSupport do
           ;;
         *)
           exit 0
+          ;;
+      esac
+    done
+    """
+
+    File.write!(path, script)
+    File.chmod!(path, 0o755)
+  end
+
+  # Write a holding fake Codex binary that starts a turn and then waits.
+  #
+  # This variant is used by blocker and priority smoke scenarios that only need
+  # the orchestrator to claim work deterministically without mutating tracker
+  # state on their behalf.
+  #
+  # Returns `:ok`.
+  defp write_hold_codex!(path, trace_file) do
+    initialize_response = Jason.encode!(%{"id" => 1, "result" => %{}})
+    thread_response = Jason.encode!(%{"id" => 2, "result" => %{"thread" => %{"id" => "thread-live-smoke-hold"}}})
+    turn_response = Jason.encode!(%{"id" => 3, "result" => %{"turn" => %{"id" => "turn-live-smoke-hold"}}})
+
+    script = """
+    #!/bin/sh
+    set -eu
+    trace_file=#{shell_escape(trace_file)}
+    count=0
+
+    emit_json() {
+      printf 'STDOUT:%s\\n' "$1" >> "$trace_file"
+      printf '%s\\n' "$1"
+    }
+
+    trap 'exit 0' INT TERM
+
+    while IFS= read -r line; do
+      count=$((count + 1))
+      printf 'JSON:%s\\n' "$line" >> "$trace_file"
+
+      case "$count" in
+        1)
+          emit_json '#{initialize_response}'
+          ;;
+        2)
+          ;;
+        3)
+          emit_json '#{thread_response}'
+          ;;
+        4)
+          emit_json '#{turn_response}'
+          printf 'PWD:%s\\n' "$PWD" >> "$trace_file"
+          while :; do
+            sleep 1
+          done
+          ;;
+        *)
+          while :; do
+            sleep 1
+          done
           ;;
       esac
     done
@@ -1003,6 +1552,31 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     end
   end
 
+  # Extract the optional numeric `Priority` field metadata from the sandbox board.
+  #
+  # Returns a priority field map or `nil` when the board does not expose the
+  # numeric field used by the priority smoke scenario.
+  defp project_priority_field(project) do
+    project
+    |> get_in(["fields", "nodes"])
+    |> List.wrap()
+    |> Enum.find(fn
+      %{"name" => @priority_field_name, "__typename" => "ProjectV2Field", "dataType" => "NUMBER"} -> true
+      _field -> false
+    end)
+    |> case do
+      %{"id" => field_id, "name" => field_name} when is_binary(field_id) and is_binary(field_name) ->
+        %{
+          id: field_id,
+          name: field_name,
+          type: :number
+        }
+
+      _ ->
+        nil
+    end
+  end
+
   # Extract PR-backed project items already present on the sandbox board.
   #
   # Returns a list of PR item metadata maps.
@@ -1094,6 +1668,61 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     end
   end
 
+  # Require the sandbox board to expose the numeric `Priority` field.
+  #
+  # Returns the parsed priority field metadata or raises when the board is not
+  # prepared for the priority smoke scenario.
+  defp require_priority_field!(bootstrap) when is_map(bootstrap) do
+    case Map.get(bootstrap, :priority_field) do
+      %{id: field_id} = priority_field when is_binary(field_id) ->
+        priority_field
+
+      _ ->
+        raise "Live smoke priority scenario requires a numeric #{@priority_field_name} field on the sandbox board."
+    end
+  end
+
+  # Require the sandbox repository default branch OID for linked-branch smoke.
+  #
+  # Returns the commit OID string or raises when the bootstrap metadata is
+  # incomplete.
+  defp require_default_branch_oid!(bootstrap) when is_map(bootstrap) do
+    case Map.get(bootstrap, :default_branch_oid) do
+      oid when is_binary(oid) and oid != "" -> oid
+      _ -> raise "Live smoke linked-branch scenario requires the sandbox repository default-branch commit OID."
+    end
+  end
+
+  # Delete one linked branch from the GitHub issue linkage graph.
+  #
+  # Returns `:ok`.
+  defp delete_linked_branch!(tracker, linked_branch_id) when is_binary(linked_branch_id) do
+    _response =
+      graphql!(
+        tracker,
+        @delete_linked_branch_mutation,
+        %{linkedBranchId: linked_branch_id},
+        operation_name: "OvertureLiveSmokeDeleteLinkedBranch"
+      )
+
+    :ok
+  end
+
+  # Delete one underlying Git ref after unlinking the branch from the issue.
+  #
+  # Returns `:ok`.
+  defp delete_ref!(tracker, ref_id) when is_binary(ref_id) do
+    _response =
+      graphql!(
+        tracker,
+        @delete_ref_mutation,
+        %{refId: ref_id},
+        operation_name: "OvertureLiveSmokeDeleteRef"
+      )
+
+    :ok
+  end
+
   # Decide whether the smoke marker comment is present on the issue.
   #
   # Returns `true` or `false`.
@@ -1101,6 +1730,28 @@ defmodule SymphonyElixir.LiveSmokeSupport do
     issue_state.comments
     |> List.wrap()
     |> Enum.any?(&(&1 == marker))
+  end
+
+  # Continue checking that the orchestrator has not claimed one project item.
+  #
+  # Returns `:ok` or raises if the issue becomes claimed before the deadline.
+  defp do_assert_issue_unclaimed!(orchestrator_pid, issue_id, started_at, duration_ms, interval_ms) do
+    state = :sys.get_state(orchestrator_pid)
+
+    cond do
+      Map.has_key?(state.running, issue_id) ->
+        raise "Live smoke expected #{issue_id} to remain unclaimed, but it entered the running set."
+
+      MapSet.member?(state.claimed, issue_id) ->
+        raise "Live smoke expected #{issue_id} to remain unclaimed, but it entered the claimed set."
+
+      System.monotonic_time(:millisecond) - started_at >= duration_ms ->
+        :ok
+
+      true ->
+        Process.sleep(interval_ms)
+        do_assert_issue_unclaimed!(orchestrator_pid, issue_id, started_at, duration_ms, interval_ms)
+    end
   end
 
   # Wait until the provided function returns a truthy value.

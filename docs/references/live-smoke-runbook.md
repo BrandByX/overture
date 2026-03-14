@@ -11,10 +11,12 @@ This path is intentionally stronger than unit or adapter coverage:
 
 - it starts the real Overture orchestrator during the test run
 - it uses the real GitHub Projects board and live tracker auth
-- it creates a disposable issue-backed project item
+- it creates disposable issue-backed tracker fixtures
 - it proves Overture can poll, claim, create a workspace, write a tracker comment, and transition
   tracker state
 - it proves PR-linked project items remain non-runnable
+- it proves blocker gating, off-board blocker fallback, priority ordering, and linked-branch
+  ambiguity against the live sandbox board
 
 ## Prerequisites
 
@@ -47,6 +49,7 @@ Concrete sandbox values:
 - project number: `5`
 - board name: `Overture Sandbox`
 - workflow field: `Status`
+- priority field for smoke: numeric `Priority`
 
 ## Opt-in environment gate
 
@@ -85,6 +88,12 @@ That setup proves:
 - the project item transitions to `Done`
 - the linked issue is closed with the expected close reason
 - a PR-linked project item can be present on the board without becoming runnable work
+- a same-board `Todo` item stays blocked while its same-board blocker remains in the non-active
+  `Backlog` holding state
+- an off-board blocker keeps a `Todo` item blocked until the blocker closes
+- a priority `1` runnable item is claimed before a priority `3` runnable item when the smoke
+  workflow runs with exactly one available slot
+- an issue with two linked branches still normalizes `branch_name` to `nil`
 
 ## Cleanup behavior
 
@@ -96,6 +105,8 @@ After the smoke run, cleanup:
 - removes the disposable project item from `Overture Sandbox`
 - removes any PR-backed fixture item created specifically for the smoke run
 - restores reused PR-backed item state when needed
+- removes live blocker relationships created for blocker scenarios
+- unlinks linked branches created for smoke and deletes the underlying repository refs
 - removes the temporary local workspace root
 
 Deletion is not the default cleanup behavior.
@@ -109,7 +120,6 @@ It does not prove:
 - multi-repo board behavior
 - draft-item behavior
 - PR-linked items as runnable work, which are intentionally unsupported
-- dependency/blocker semantics
 - GitHub App auth behavior
 
 If those concerns need validation later, they should land as separate tickets.

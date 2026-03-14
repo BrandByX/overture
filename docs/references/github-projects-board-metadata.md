@@ -65,6 +65,17 @@ without mixing those environment-specific values into the generic runtime contra
 - `Cancelled` -> `1dda1f75`
 - `Duplicate` -> `67952265`
 
+### Sandbox Priority prerequisite
+
+The parity live-smoke path now expects `Overture Sandbox` to expose a numeric `Priority` field for
+priority-ordering validation.
+
+- expected field name: `Priority`
+- expected field type: `ProjectV2Field` with `dataType == NUMBER`
+
+If that field is missing, the opt-in priority smoke scenario should fail clearly instead of
+silently skipping.
+
 ## Workflow semantics
 
 - non-active holding state:

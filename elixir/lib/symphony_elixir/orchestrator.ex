@@ -637,7 +637,7 @@ defmodule SymphonyElixir.Orchestrator do
     normalize_issue_state(issue_state) == "todo" and
       Enum.any?(blockers, fn
         %{state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states)
+          !blocker_terminal?(blocker_state, terminal_states)
 
         _ ->
           true
@@ -645,6 +645,19 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+
+  # Decide whether a blocker state should be treated as terminal.
+  #
+  # Accepts configured workflow terminal states and GitHub-native `CLOSED`
+  # fallback states for blockers that are not on the configured board.
+  #
+  # Returns `true` when the blocker should not prevent dispatch.
+  defp blocker_terminal?(state_name, terminal_states) when is_binary(state_name) do
+    normalized_state = normalize_issue_state(state_name)
+    normalized_state == "closed" or MapSet.member?(terminal_states, normalized_state)
+  end
+
+  defp blocker_terminal?(_state_name, _terminal_states), do: false
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
