@@ -11,7 +11,7 @@ This directory holds the canonical migration and design docs for the Overture fo
 - `PLANS.md`: execution program index and board links
 - `design-docs/`: durable design decisions for the fork
 - `product-specs/`: target runtime and tracker contract
-- `references/`: live environment metadata and operator-facing reference values
+- `references/`: live environment metadata and operator-facing reference values, including the live smoke runbook
 - `exec-plans/active/`: active implementation sequencing
 
 ## Start here
