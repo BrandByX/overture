@@ -52,6 +52,8 @@ defmodule SymphonyElixir.Config.Schema do
       field(:project_number, :integer)
       field(:repository, :string)
       field(:status_field_name, :string, default: "Status")
+      field(:priority_field_name, :string)
+      field(:priority_option_map, :map)
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress", "Human Review", "Rework", "Merging"])
       field(:terminal_states, {:array, :string}, default: ["Done", "Cancelled", "Duplicate"])
@@ -70,6 +72,8 @@ defmodule SymphonyElixir.Config.Schema do
           :project_number,
           :repository,
           :status_field_name,
+          :priority_field_name,
+          :priority_option_map,
           :assignee,
           :active_states,
           :terminal_states
@@ -383,7 +387,8 @@ defmodule SymphonyElixir.Config.Schema do
     tracker = %{
       settings.tracker
       | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("GITHUB_TOKEN")),
-        assignee: normalize_secret_value(settings.tracker.assignee)
+        assignee: normalize_secret_value(settings.tracker.assignee),
+        priority_option_map: normalize_optional_map(settings.tracker.priority_option_map)
     }
 
     workspace = %{

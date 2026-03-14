@@ -1212,13 +1212,22 @@ GitHub Projects-specific requirements for `tracker.kind == "github_projects"`:
   `ProjectV2`
 - `tracker.repository` filters runnable items to one configured repository
 - `tracker.status_field_name` must resolve to a `ProjectV2SingleSelectField`
+- `tracker.priority_field_name`, when present, must resolve to either:
+  - `ProjectV2Field` with `dataType == NUMBER`
+  - `ProjectV2SingleSelectField`
+- `tracker.priority_field_name` must not match `tracker.status_field_name`
+- `tracker.priority_option_map` is only valid when `tracker.priority_field_name` resolves to a
+  single-select field
 - Candidate issue query filters to issue-backed project items whose current project `Status`
   appears in `tracker.active_states`
 - PR-linked project items, draft items, redacted items, archived items, and wrong-repo items are
   skipped
 - Issue-state refresh query uses project item IDs as canonical runtime IDs
-- Linked issue reads should request `stateReason(enableDuplicate: true)` when issue close reasons
-  are needed
+- Linked issue reads should isolate `stateReason(enableDuplicate: true)` behind one shared query
+  helper when issue close reasons are needed
+- Close mutations should use `IssueClosedStateReason`
+- Linked issue reads should request blockers via `Issue.blockedBy`
+- Linked issue reads should request linked branches via `Issue.linkedBranches`
 - Pagination required for candidate issues
 - Page size default: `50`
 - Network timeout: `30000 ms`
@@ -1241,8 +1250,12 @@ Additional normalization details:
 - `content_state_reason` -> linked issue close reason when available
 - `assigned_to_worker` -> derived from explicit assignee-login filtering
 - `labels` -> lowercase strings
-- `blocked_by` -> empty list in v1
+- `blocked_by` -> blocker refs from GitHub issue dependencies
+  - same-board blockers use board workflow state
+  - off-board blockers use GitHub-native `OPEN` / `CLOSED`
 - `priority` -> integer only (non-integers become null)
+- `priority` -> optional board-configured project field, normalized to integers `1..4`
+- `branch_name` -> set only when exactly one linked branch exists
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
 
 ### 11.4 Error Handling Contract

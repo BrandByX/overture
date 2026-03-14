@@ -174,6 +174,79 @@ defmodule SymphonyElixir.CoreTest do
     assert :ok = Config.validate!()
   end
 
+  test "github projects priority config validation checks" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_option_map: %{"P1" => 1}
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.priority_option_map requires tracker.priority_field_name"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Status",
+      tracker_priority_option_map: nil
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.priority_field_name must not match tracker.status_field_name"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Priority"
+    )
+
+    assert :ok = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Priority",
+      tracker_priority_option_map: %{"P1" => 1}
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.priority_option_map is only allowed"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Priority Select"
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.priority_option_map is required"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Priority Select",
+      tracker_priority_option_map: %{"Missing" => 1}
+    )
+
+    assert {:error, {:github_projects_missing_priority_options, ["Missing"]}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Priority Select",
+      tracker_priority_option_map: %{"P1" => 7}
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.priority_option_map values must be integers in 1..4"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Priority Select",
+      tracker_priority_option_map: %{"P1" => 1, "P2" => 2}
+    )
+
+    assert :ok = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Priority Text"
+    )
+
+    assert {:error, {:github_projects_priority_field_unsupported, "Priority Text", "ProjectV2Field", "TEXT"}} =
+             Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_priority_field_name: "Unknown Priority"
+    )
+
+    assert {:error, {:github_projects_priority_field_not_found, "Unknown Priority"}} = Config.validate!()
+  end
+
   test "tracker assignee must be configured explicitly" do
     previous_github_assignee = System.get_env("GITHUB_ASSIGNEE")
     env_assignee = "sidney"

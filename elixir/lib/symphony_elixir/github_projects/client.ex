@@ -21,188 +21,12 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   @assignee_page_size 20
   @label_page_size 50
   @id_batch_size 50
-
-  @project_contract_query """
-  query OvertureProjectFieldContract(
-    $ownerLogin: String!,
-    $projectNumber: Int!,
-    $fieldFirst: Int!,
-    $after: String
-  ) {
-    organization(login: $ownerLogin) {
-      projectV2(number: $projectNumber) {
-        id
-        fields(first: $fieldFirst, after: $after) {
-          nodes {
-            __typename
-            ... on ProjectV2FieldCommon {
-              id
-              name
-            }
-            ... on ProjectV2SingleSelectField {
-              options {
-                id
-                name
-              }
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-    user(login: $ownerLogin) {
-      projectV2(number: $projectNumber) {
-        id
-        fields(first: $fieldFirst, after: $after) {
-          nodes {
-            __typename
-            ... on ProjectV2FieldCommon {
-              id
-              name
-            }
-            ... on ProjectV2SingleSelectField {
-              options {
-                id
-                name
-              }
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-  }
-  """
-
-  @project_items_query """
-  query OvertureProjectItems(
-    $projectId: ID!,
-    $statusFieldName: String!,
-    $first: Int!,
-    $after: String,
-    $assigneeFirst: Int!,
-    $labelFirst: Int!
-  ) {
-    node(id: $projectId) {
-      ... on ProjectV2 {
-        items(first: $first, after: $after) {
-          nodes {
-            id
-            isArchived
-            fieldValueByName(name: $statusFieldName) {
-              __typename
-              ... on ProjectV2ItemFieldSingleSelectValue {
-                name
-                optionId
-              }
-            }
-            content {
-              __typename
-              ... on Issue {
-                id
-                number
-                title
-                body
-                url
-                state
-                stateReason(enableDuplicate: true)
-                repository {
-                  nameWithOwner
-                }
-                assignees(first: $assigneeFirst) {
-                  nodes {
-                    login
-                  }
-                }
-                labels(first: $labelFirst) {
-                  nodes {
-                    name
-                  }
-                }
-                createdAt
-                updatedAt
-              }
-              ... on PullRequest {
-                id
-              }
-              ... on DraftIssue {
-                title
-              }
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-  }
-  """
-
-  @project_items_by_id_query """
-  query OvertureProjectItemsById(
-    $ids: [ID!]!,
-    $statusFieldName: String!,
-    $assigneeFirst: Int!,
-    $labelFirst: Int!
-  ) {
-    nodes(ids: $ids) {
-      __typename
-      ... on ProjectV2Item {
-        id
-        isArchived
-        fieldValueByName(name: $statusFieldName) {
-          __typename
-          ... on ProjectV2ItemFieldSingleSelectValue {
-            name
-            optionId
-          }
-        }
-        content {
-          __typename
-          ... on Issue {
-            id
-            number
-            title
-            body
-            url
-            state
-            stateReason(enableDuplicate: true)
-            repository {
-              nameWithOwner
-            }
-            assignees(first: $assigneeFirst) {
-              nodes {
-                login
-              }
-            }
-            labels(first: $labelFirst) {
-              nodes {
-                name
-              }
-            }
-            createdAt
-            updatedAt
-          }
-          ... on PullRequest {
-            id
-          }
-          ... on DraftIssue {
-            title
-          }
-        }
-      }
-    }
-  }
-  """
-
+  @dependency_page_size 10
+  @blocker_page_size 50
+  @project_item_lookup_page_size 20
+  @linked_branch_page_size 1
+  @issue_state_reason_selection "stateReason(enableDuplicate: true)"
+  @issue_closed_state_reasons ["COMPLETED", "NOT_PLANNED", "DUPLICATE"]
   @add_comment_mutation """
   mutation OvertureAddComment($contentId: ID!, $body: String!) {
     addComment(input: {subjectId: $contentId, body: $body}) {
@@ -232,30 +56,6 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   }
   """
 
-  @close_issue_mutation """
-  mutation OvertureCloseIssue($contentId: ID!, $stateReason: IssueStateReason!) {
-    closeIssue(input: {issueId: $contentId, stateReason: $stateReason}) {
-      issue {
-        id
-        state
-        stateReason(enableDuplicate: true)
-      }
-    }
-  }
-  """
-
-  @reopen_issue_mutation """
-  mutation OvertureReopenIssue($contentId: ID!) {
-    reopenIssue(input: {issueId: $contentId}) {
-      issue {
-        id
-        state
-        stateReason(enableDuplicate: true)
-      }
-    }
-  }
-  """
-
   @type request_fun :: (map(), [{binary(), binary()}] -> {:ok, %{status: integer(), body: map() | binary()}} | {:error, term()})
 
   @type project_contract :: %{
@@ -265,7 +65,16 @@ defmodule SymphonyElixir.GitHubProjects.Client do
             id: String.t(),
             name: String.t(),
             option_ids_by_name: %{optional(String.t()) => String.t()}
-          }
+          },
+          priority_field:
+            nil
+            | %{
+                id: String.t(),
+                name: String.t(),
+                type: :number | :single_select,
+                priority_by_option_id: %{optional(String.t()) => integer()},
+                priority_by_option_name: %{optional(String.t()) => integer()}
+              }
         }
 
   @doc """
@@ -430,6 +239,48 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     end
   end
 
+  @doc """
+  Verify the live GitHub GraphQL schema contract used by Overture.
+
+  Introspects the issue close-reason read surface and close mutation input
+  contract so tests and live smoke can fail clearly when GitHub changes the
+  schema in a way that breaks Overture's tracker client.
+
+  Returns `:ok` or `{:error, reason}`.
+  """
+  @spec verify_schema_contract() :: :ok | {:error, term()}
+  def verify_schema_contract do
+    tracker = Config.settings!().tracker
+    verify_schema_contract_with_tracker(tracker, &post_graphql_request/2)
+  end
+
+  @doc false
+  @spec verify_schema_contract_for_test(term(), request_fun()) :: :ok | {:error, term()}
+  def verify_schema_contract_for_test(tracker, request_fun) when is_function(request_fun, 2) do
+    verify_schema_contract_with_tracker(tracker, request_fun)
+  end
+
+  # Verify the live GitHub schema contract used by Overture.
+  #
+  # Introspects the issue close-reason read surface and close mutation input
+  # contract so tests and live smoke can fail clearly when GitHub changes the
+  # schema in a way that breaks the tracker client.
+  #
+  # Returns `:ok` or `{:error, reason}`.
+  defp verify_schema_contract_with_tracker(tracker, request_fun) do
+    with {:ok, response} <-
+           graphql(schema_contract_query(), %{},
+             tracker: tracker,
+             request_fun: request_fun,
+             operation_name: "OvertureGitHubSchemaContract"
+           ),
+         :ok <- ensure_issue_state_reason_contract(response),
+         :ok <- ensure_close_issue_input_contract(response),
+         :ok <- ensure_issue_closed_state_reason_values(response) do
+      :ok
+    end
+  end
+
   # Fetch candidate issues using the provided tracker settings.
   #
   # Resolves the board contract, then walks the configured board for issue-backed
@@ -548,18 +399,21 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     with :ok <- validate_owner_type(tracker.owner_type),
          :ok <- validate_repository(tracker.repository),
          {:ok, project} <- fetch_project(tracker, request_fun),
-         {:ok, field} <- find_status_field(project, tracker.status_field_name),
-         :ok <- ensure_single_select_field(field, tracker.status_field_name),
-         :ok <- ensure_state_options(field, tracker) do
+         {:ok, status_field} <- find_status_field(project, tracker.status_field_name),
+         {:ok, priority_field} <- find_priority_field(project, tracker.priority_field_name),
+         :ok <- ensure_single_select_field(status_field, tracker.status_field_name),
+         :ok <- ensure_state_options(status_field, tracker),
+         {:ok, priority_field_contract} <- build_priority_field_contract(priority_field, tracker) do
       {:ok,
        %{
          project_id: project["id"],
          repository: tracker.repository,
          status_field: %{
-           id: field["id"],
-           name: field["name"],
-           option_ids_by_name: status_option_ids(field)
-         }
+           id: status_field["id"],
+           name: status_field["name"],
+           option_ids_by_name: status_option_ids(status_field)
+         },
+         priority_field: priority_field_contract
        }}
     end
   end
@@ -580,10 +434,11 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     fetch_project_field_page(tracker, owner_field, nil, [], request_fun)
   end
 
-  # Fetch one page of project field metadata and continue until the status field appears.
+  # Fetch one page of project field metadata and continue until required fields are found.
   #
-  # Paginates the `ProjectV2.fields` connection so status field lookup remains
-  # correct on boards with more fields than the initial page size.
+  # Paginates the `ProjectV2.fields` connection so status and optional priority
+  # field lookup remains correct on boards with more fields than the initial
+  # page size.
   #
   # Returns `{:ok, project_map}` or `{:error, reason}`.
   defp fetch_project_field_page(tracker, owner_field, after_cursor, acc_fields, request_fun) do
@@ -595,7 +450,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     }
 
     with {:ok, response} <-
-           graphql(@project_contract_query, variables,
+           graphql(project_contract_query(owner_field), variables,
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureProjectFieldContract"
@@ -610,7 +465,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
       project = put_in(project, ["fields", "nodes"], updated_fields)
 
       cond do
-        status_field_present?(updated_fields, tracker.status_field_name) ->
+        field_targets_loaded?(updated_fields, tracker.status_field_name, tracker.priority_field_name) ->
           {:ok, project}
 
         page_info.has_next_page == true and is_binary(page_info.end_cursor) and page_info.end_cursor != "" ->
@@ -623,6 +478,398 @@ defmodule SymphonyElixir.GitHubProjects.Client do
           {:ok, project}
       end
     end
+  end
+
+  # Build the owner-specific project contract query for the configured board owner.
+  #
+  # GitHub returns a `NOT_FOUND` error when a query asks for `user(...)` against
+  # an organization login, so contract lookup must query only the configured
+  # owner branch.
+  #
+  # Returns a GraphQL query string.
+  defp project_contract_query(owner_field) when owner_field in ["organization", "user"] do
+    """
+    query OvertureProjectFieldContract(
+      $ownerLogin: String!,
+      $projectNumber: Int!,
+      $fieldFirst: Int!,
+      $after: String
+    ) {
+      #{owner_field}(login: $ownerLogin) {
+        projectV2(number: $projectNumber) {
+          id
+          fields(first: $fieldFirst, after: $after) {
+            nodes {
+              __typename
+              ... on ProjectV2FieldCommon {
+                id
+                name
+              }
+              ... on ProjectV2Field {
+                dataType
+              }
+              ... on ProjectV2SingleSelectField {
+                options {
+                  id
+                  name
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
+  end
+
+  # Build the project item polling query, optionally including priority.
+  #
+  # Uses one query shape for status-only boards and one that also requests the
+  # configured priority field value when priority parity is enabled.
+  #
+  # Returns a GraphQL query string.
+  defp project_items_query(include_priority?) when is_boolean(include_priority?) do
+    """
+    query OvertureProjectItems(
+      $projectId: ID!,
+      $statusFieldName: String!,
+      #{project_items_priority_variable(include_priority?)}
+      $first: Int!,
+      $after: String,
+      $assigneeFirst: Int!,
+      $labelFirst: Int!
+    ) {
+      node(id: $projectId) {
+        ... on ProjectV2 {
+          items(first: $first, after: $after) {
+            nodes {
+              id
+              isArchived
+              #{status_field_value_selection()}
+              #{priority_field_value_selection(include_priority?)}
+              content {
+                __typename
+                ... on Issue {
+                  #{issue_content_selection()}
+                }
+                ... on PullRequest {
+                  id
+                }
+                ... on DraftIssue {
+                  title
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
+  end
+
+  # Build the project item refresh query, optionally including priority.
+  #
+  # Returns a GraphQL query string.
+  defp project_items_by_id_query(include_priority?) when is_boolean(include_priority?) do
+    """
+    query OvertureProjectItemsById(
+      $ids: [ID!]!,
+      $statusFieldName: String!,
+      #{project_items_priority_variable(include_priority?)}
+      $assigneeFirst: Int!,
+      $labelFirst: Int!
+    ) {
+      nodes(ids: $ids) {
+        __typename
+        ... on ProjectV2Item {
+          id
+          isArchived
+          #{status_field_value_selection()}
+          #{priority_field_value_selection(include_priority?)}
+          content {
+            __typename
+            ... on Issue {
+              #{issue_content_selection()}
+            }
+            ... on PullRequest {
+              id
+            }
+            ... on DraftIssue {
+              title
+            }
+          }
+        }
+      }
+    }
+    """
+  end
+
+  # Build the close mutation using the live GitHub close-reason enum.
+  #
+  # Returns a GraphQL mutation string.
+  defp close_issue_mutation do
+    """
+    mutation OvertureCloseIssue($contentId: ID!, $stateReason: IssueClosedStateReason) {
+      closeIssue(input: {issueId: $contentId, stateReason: $stateReason}) {
+        issue {
+          id
+          state
+          #{issue_state_reason_selection()}
+        }
+      }
+    }
+    """
+  end
+
+  # Build the reopen mutation using the shared issue state-reason selection.
+  #
+  # Returns a GraphQL mutation string.
+  defp reopen_issue_mutation do
+    """
+    mutation OvertureReopenIssue($contentId: ID!) {
+      reopenIssue(input: {issueId: $contentId}) {
+        issue {
+          id
+          state
+          #{issue_state_reason_selection()}
+        }
+      }
+    }
+    """
+  end
+
+  # Build the blocker pagination query for one issue.
+  #
+  # Returns a GraphQL query string.
+  defp blocker_page_query do
+    """
+    query OvertureIssueBlockedByPage($issueId: ID!, $after: String) {
+      node(id: $issueId) {
+        ... on Issue {
+          id
+          blockedBy(first: #{@blocker_page_size}, after: $after) {
+            nodes {
+              id
+              number
+              state
+              repository {
+                nameWithOwner
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            totalCount
+          }
+        }
+      }
+    }
+    """
+  end
+
+  # Build the initial blocker board-state lookup query for issue batches.
+  #
+  # Returns a GraphQL query string.
+  defp blocker_project_items_query do
+    """
+    query OvertureBlockerProjectItems($ids: [ID!]!, $statusFieldName: String!) {
+      nodes(ids: $ids) {
+        __typename
+        ... on Issue {
+          id
+          state
+          projectItems(includeArchived: false, first: #{@project_item_lookup_page_size}) {
+            nodes {
+              project {
+                id
+              }
+              #{status_field_value_selection()}
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
+  end
+
+  # Build the follow-up blocker board-state pagination query for one issue.
+  #
+  # Returns a GraphQL query string.
+  defp blocker_project_items_page_query do
+    """
+    query OvertureBlockerProjectItemsPage($issueId: ID!, $statusFieldName: String!, $after: String) {
+      node(id: $issueId) {
+        ... on Issue {
+          id
+          state
+          projectItems(includeArchived: false, first: #{@project_item_lookup_page_size}, after: $after) {
+            nodes {
+              project {
+                id
+              }
+              #{status_field_value_selection()}
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
+  end
+
+  # Build the schema introspection query used by tests and live smoke.
+  #
+  # Returns a GraphQL query string.
+  defp schema_contract_query do
+    """
+    query OvertureGitHubSchemaContract {
+      issueType: __type(name: "Issue") {
+        fields {
+          name
+          args {
+            name
+          }
+        }
+      }
+      closeIssueInputType: __type(name: "CloseIssueInput") {
+        inputFields {
+          name
+          type {
+            name
+            kind
+            ofType {
+              name
+              kind
+            }
+          }
+        }
+      }
+      issueClosedStateReasonType: __type(name: "IssueClosedStateReason") {
+        enumValues {
+          name
+        }
+      }
+    }
+    """
+  end
+
+  # Return the shared issue state-reason field selection.
+  #
+  # Returns a GraphQL field selection string.
+  defp issue_state_reason_selection do
+    @issue_state_reason_selection
+  end
+
+  # Return the status field selection used on project items and blocker items.
+  #
+  # Returns a GraphQL field selection string.
+  defp status_field_value_selection do
+    """
+    fieldValueByName(name: $statusFieldName) {
+      __typename
+      ... on ProjectV2ItemFieldSingleSelectValue {
+        name
+        optionId
+      }
+    }
+    """
+  end
+
+  # Return the optional priority field selection for project items.
+  #
+  # Returns a GraphQL field selection string.
+  defp priority_field_value_selection(true) do
+    """
+    priorityFieldValue: fieldValueByName(name: $priorityFieldName) {
+      __typename
+      ... on ProjectV2ItemFieldNumberValue {
+        number
+      }
+      ... on ProjectV2ItemFieldSingleSelectValue {
+        name
+        optionId
+      }
+    }
+    """
+  end
+
+  defp priority_field_value_selection(false), do: ""
+
+  # Return the optional priority query variable declaration.
+  #
+  # Returns a GraphQL variable declaration string.
+  defp project_items_priority_variable(true), do: "$priorityFieldName: String!,"
+  defp project_items_priority_variable(false), do: ""
+
+  # Return the shared issue content selection used by GitHub item reads.
+  #
+  # Returns a GraphQL selection string.
+  defp issue_content_selection do
+    """
+    id
+    number
+    title
+    body
+    url
+    state
+    #{issue_state_reason_selection()}
+    repository {
+      nameWithOwner
+    }
+    assignees(first: $assigneeFirst) {
+      nodes {
+        login
+      }
+    }
+    labels(first: $labelFirst) {
+      nodes {
+        name
+      }
+    }
+    blockedBy(first: #{@dependency_page_size}) {
+      nodes {
+        id
+        number
+        state
+        repository {
+          nameWithOwner
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
+    }
+    linkedBranches(first: #{@linked_branch_page_size}) {
+      nodes {
+        id
+        ref {
+          id
+          name
+        }
+      }
+      totalCount
+    }
+    createdAt
+    updatedAt
+    """
   end
 
   # Fetch all project items whose workflow state matches the requested names.
@@ -652,7 +899,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     }
 
     with {:ok, response} <-
-           graphql(@project_items_query, variables,
+           graphql(project_items_query(contract.priority_field != nil), maybe_put_priority_field_name(variables, contract),
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureProjectItems"
@@ -690,7 +937,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     }
 
     with {:ok, response} <-
-           graphql(@project_items_by_id_query, variables,
+           graphql(project_items_by_id_query(contract.priority_field != nil), maybe_put_priority_field_name(variables, contract),
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureProjectItemsById"
@@ -739,15 +986,19 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     with false <- Map.get(item, "isArchived", false),
          {:ok, state_name} <- project_item_state(item),
          {:ok, issue_content} <- issue_content(item),
-         :ok <- ensure_issue_repository(issue_content, tracker.repository) do
-      issue =
-        build_issue(item, issue_content, state_name, assignee_filter)
-
+         :ok <- ensure_issue_repository(issue_content, tracker.repository),
+         {:ok, issue} <- build_issue(item, issue_content, state_name, assignee_filter, tracker, contract, request_fun) do
       reconcile_issue_for_read(issue, tracker, contract, request_fun)
     else
-      true -> :skip
-      :skip -> :skip
-      {:error, _reason} -> :skip
+      true ->
+        :skip
+
+      :skip ->
+        :skip
+
+      {:error, reason} ->
+        Logger.warning("Skipping project item during normalization: item_id=#{inspect(Map.get(item, "id"))} reason=#{inspect(reason)}")
+        :skip
     end
   end
 
@@ -808,29 +1059,34 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   # assignee routing from normalized GitHub login values.
   #
   # Returns a `%Issue{}` struct.
-  defp build_issue(item, issue_content, state_name, assignee_filter) do
+  defp build_issue(item, issue_content, state_name, assignee_filter, tracker, contract, request_fun) do
     assignee_logins = extract_assignee_logins(issue_content)
+    priority = extract_priority(item, contract)
+    branch_name = extract_branch_name(issue_content)
 
-    %Issue{
-      id: Map.get(item, "id"),
-      content_id: Map.get(issue_content, "id"),
-      content_number: Map.get(issue_content, "number"),
-      identifier: build_issue_identifier(issue_content),
-      title: Map.get(issue_content, "title"),
-      description: Map.get(issue_content, "body"),
-      priority: nil,
-      state: state_name,
-      content_state: Map.get(issue_content, "state"),
-      content_state_reason: Map.get(issue_content, "stateReason"),
-      branch_name: nil,
-      url: Map.get(issue_content, "url"),
-      assignee_logins: assignee_logins,
-      blocked_by: [],
-      labels: extract_labels(issue_content),
-      assigned_to_worker: assigned_to_worker?(assignee_logins, assignee_filter),
-      created_at: parse_datetime(Map.get(issue_content, "createdAt")),
-      updated_at: parse_datetime(Map.get(issue_content, "updatedAt"))
-    }
+    with {:ok, blocked_by} <- extract_blockers(issue_content, tracker, contract, request_fun) do
+      {:ok,
+       %Issue{
+         id: Map.get(item, "id"),
+         content_id: Map.get(issue_content, "id"),
+         content_number: Map.get(issue_content, "number"),
+         identifier: build_issue_identifier(issue_content),
+         title: Map.get(issue_content, "title"),
+         description: Map.get(issue_content, "body"),
+         priority: priority,
+         state: state_name,
+         content_state: Map.get(issue_content, "state"),
+         content_state_reason: Map.get(issue_content, "stateReason"),
+         branch_name: branch_name,
+         url: Map.get(issue_content, "url"),
+         assignee_logins: assignee_logins,
+         blocked_by: blocked_by,
+         labels: extract_labels(issue_content),
+         assigned_to_worker: assigned_to_worker?(assignee_logins, assignee_filter),
+         created_at: parse_datetime(Map.get(issue_content, "createdAt")),
+         updated_at: parse_datetime(Map.get(issue_content, "updatedAt"))
+       }}
+    end
   end
 
   # Reconcile linked issue state while reading project items.
@@ -936,7 +1192,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     variables = %{contentId: issue.content_id}
 
     with {:ok, response} <-
-           graphql(@reopen_issue_mutation, variables,
+           graphql(reopen_issue_mutation(), variables,
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureReopenIssue"
@@ -962,7 +1218,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     variables = %{contentId: issue.content_id, stateReason: state_reason}
 
     with {:ok, response} <-
-           graphql(@close_issue_mutation, variables,
+           graphql(close_issue_mutation(), variables,
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureCloseIssue"
@@ -1029,17 +1285,27 @@ defmodule SymphonyElixir.GitHubProjects.Client do
 
   defp extract_project(_response, _owner_field), do: {:error, :github_projects_project_not_found}
 
-  # Detect whether the configured workflow field is already present in loaded field pages.
+  # Detect whether configured field targets are already present in loaded pages.
   #
-  # Returns `true` when the field list contains the named status field.
-  defp status_field_present?(fields, status_field_name) when is_list(fields) and is_binary(status_field_name) do
-    Enum.any?(fields, fn
-      %{"name" => ^status_field_name} -> true
-      _field -> false
-    end)
+  # Returns `true` when the required status field and optional priority field
+  # have both been found.
+  defp field_targets_loaded?(fields, status_field_name, priority_field_name)
+       when is_list(fields) and is_binary(status_field_name) do
+    status_field_found? = find_named_field(fields, status_field_name) != nil
+
+    cond do
+      not status_field_found? ->
+        false
+
+      is_nil(normalize_optional_string(priority_field_name)) ->
+        true
+
+      true ->
+        find_named_field(fields, priority_field_name) != nil
+    end
   end
 
-  defp status_field_present?(_fields, _status_field_name), do: false
+  defp field_targets_loaded?(_fields, _status_field_name, _priority_field_name), do: false
 
   # Find the configured workflow field on the project.
   #
@@ -1048,20 +1314,47 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   #
   # Returns `{:ok, field}` or `{:error, reason}`.
   defp find_status_field(project, status_field_name) when is_binary(status_field_name) do
-    field =
-      project
-      |> get_in(["fields", "nodes"])
-      |> List.wrap()
-      |> Enum.find(fn
-        %{"name" => ^status_field_name} -> true
-        _field -> false
-      end)
+    field = find_named_field(project |> get_in(["fields", "nodes"]) |> List.wrap(), status_field_name)
 
     case field do
       %{} = value -> {:ok, value}
       nil -> {:error, {:github_projects_status_field_not_found, status_field_name}}
     end
   end
+
+  # Find the optional priority field on the project.
+  #
+  # Returns `{:ok, field | nil}` or `{:error, reason}`.
+  defp find_priority_field(_project, nil), do: {:ok, nil}
+
+  defp find_priority_field(project, priority_field_name) when is_binary(priority_field_name) do
+    normalized_name = normalize_optional_string(priority_field_name)
+
+    case normalized_name do
+      nil ->
+        {:ok, nil}
+
+      name ->
+        field = find_named_field(project |> get_in(["fields", "nodes"]) |> List.wrap(), name)
+
+        case field do
+          %{} = value -> {:ok, value}
+          nil -> {:error, {:github_projects_priority_field_not_found, name}}
+        end
+    end
+  end
+
+  # Find a project field by name from a loaded field list.
+  #
+  # Returns the matching field map or `nil`.
+  defp find_named_field(fields, field_name) when is_list(fields) and is_binary(field_name) do
+    Enum.find(fields, fn
+      %{"name" => ^field_name} -> true
+      _field -> false
+    end)
+  end
+
+  defp find_named_field(_fields, _field_name), do: nil
 
   # Ensure the configured owner type is supported.
   #
@@ -1123,6 +1416,69 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     end
   end
 
+  # Build the validated optional priority field contract.
+  #
+  # Supports numeric GitHub project fields and single-select priority fields
+  # with an explicit option-to-priority mapping.
+  #
+  # Returns `{:ok, priority_field_contract | nil}` or `{:error, reason}`.
+  defp build_priority_field_contract(nil, tracker) do
+    case normalize_priority_option_map(Map.get(tracker, :priority_option_map)) do
+      %{} = option_map when map_size(option_map) > 0 ->
+        {:error, {:invalid_workflow_config, "tracker.priority_option_map requires tracker.priority_field_name for github_projects"}}
+
+      _ ->
+        {:ok, nil}
+    end
+  end
+
+  defp build_priority_field_contract(%{"__typename" => "ProjectV2Field", "dataType" => "NUMBER"} = field, tracker) do
+    case normalize_priority_option_map(Map.get(tracker, :priority_option_map)) do
+      %{} = option_map when map_size(option_map) > 0 ->
+        {:error, {:invalid_workflow_config, "tracker.priority_option_map is only allowed for single-select GitHub priority fields"}}
+
+      _ ->
+        {:ok,
+         %{
+           id: field["id"],
+           name: field["name"],
+           type: :number,
+           priority_by_option_id: %{},
+           priority_by_option_name: %{}
+         }}
+    end
+  end
+
+  defp build_priority_field_contract(%{"__typename" => "ProjectV2SingleSelectField"} = field, tracker) do
+    priority_option_map = normalize_priority_option_map(Map.get(tracker, :priority_option_map))
+
+    cond do
+      priority_option_map == nil or priority_option_map == %{} ->
+        {:error, {:invalid_workflow_config, "tracker.priority_option_map is required for single-select GitHub priority fields"}}
+
+      true ->
+        with {:ok, option_names, option_ids_by_name} <- priority_options(field),
+             :ok <- ensure_priority_option_names(option_names, priority_option_map),
+             :ok <- ensure_priority_option_values(priority_option_map) do
+          {:ok,
+           %{
+             id: field["id"],
+             name: field["name"],
+             type: :single_select,
+             priority_by_option_id:
+               Enum.reduce(priority_option_map, %{}, fn {option_name, priority}, acc ->
+                 Map.put(acc, Map.fetch!(option_ids_by_name, option_name), priority)
+               end),
+             priority_by_option_name: priority_option_map
+           }}
+        end
+    end
+  end
+
+  defp build_priority_field_contract(%{"__typename" => typename} = field, _tracker) do
+    {:error, {:github_projects_priority_field_unsupported, field["name"], typename, Map.get(field, "dataType")}}
+  end
+
   # Build a field option-name to option-ID map.
   #
   # This lookup powers workflow state updates on project items.
@@ -1150,6 +1506,518 @@ defmodule SymphonyElixir.GitHubProjects.Client do
       option_id when is_binary(option_id) -> {:ok, option_id}
       _ -> {:error, {:github_projects_missing_state_option, state_name}}
     end
+  end
+
+  # Normalize the configured priority option map.
+  #
+  # Returns a map keyed by option name or `nil`.
+  defp normalize_priority_option_map(nil), do: nil
+
+  defp normalize_priority_option_map(option_map) when is_map(option_map) do
+    Enum.reduce(option_map, %{}, fn {option_name, priority}, acc ->
+      case normalize_optional_string(to_string(option_name)) do
+        nil -> acc
+        normalized_name -> Map.put(acc, normalized_name, priority)
+      end
+    end)
+  end
+
+  defp normalize_priority_option_map(_option_map), do: %{}
+
+  # Extract single-select priority options for validation and lookup building.
+  #
+  # Returns `{:ok, option_names, option_ids_by_name}` or `{:error, reason}`.
+  defp priority_options(field) do
+    option_ids_by_name =
+      field
+      |> Map.get("options", [])
+      |> Enum.reduce(%{}, fn option, acc ->
+        case {Map.get(option, "name"), Map.get(option, "id")} do
+          {name, option_id} when is_binary(name) and is_binary(option_id) ->
+            Map.put(acc, name, option_id)
+
+          _ ->
+            acc
+        end
+      end)
+
+    {:ok, Map.keys(option_ids_by_name) |> MapSet.new(), option_ids_by_name}
+  end
+
+  # Ensure configured priority option names exist on the live field.
+  #
+  # Returns `:ok` or `{:error, reason}`.
+  defp ensure_priority_option_names(option_names, priority_option_map) do
+    missing_option_names =
+      priority_option_map
+      |> Map.keys()
+      |> Enum.reject(&MapSet.member?(option_names, &1))
+
+    case missing_option_names do
+      [] -> :ok
+      _ -> {:error, {:github_projects_missing_priority_options, missing_option_names}}
+    end
+  end
+
+  # Ensure configured priority values stay within Symphony's supported range.
+  #
+  # Returns `:ok` or `{:error, reason}`.
+  defp ensure_priority_option_values(priority_option_map) do
+    case Enum.all?(priority_option_map, fn {_option_name, priority} -> is_integer(priority) and priority in 1..4 end) do
+      true -> :ok
+      false -> {:error, {:invalid_workflow_config, "tracker.priority_option_map values must be integers in 1..4"}}
+    end
+  end
+
+  # Add the optional priority field variable when the board contract requires it.
+  #
+  # Returns the variables map.
+  defp maybe_put_priority_field_name(variables, %{priority_field: %{name: priority_field_name}})
+       when is_map(variables) and is_binary(priority_field_name) do
+    Map.put(variables, :priorityFieldName, priority_field_name)
+  end
+
+  defp maybe_put_priority_field_name(variables, _contract), do: variables
+
+  # Normalize the optional priority value from a project item.
+  #
+  # Returns an integer priority or `nil`.
+  defp extract_priority(_item, %{priority_field: nil}), do: nil
+
+  defp extract_priority(item, %{priority_field: %{type: :number}}) when is_map(item) do
+    case Map.get(item, "priorityFieldValue") do
+      %{"__typename" => "ProjectV2ItemFieldNumberValue", "number" => value}
+      when is_number(value) and trunc(value) == value and value >= 1 and value <= 4 ->
+        trunc(value)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp extract_priority(item, %{priority_field: %{type: :single_select} = priority_field}) when is_map(item) do
+    case Map.get(item, "priorityFieldValue") do
+      %{"__typename" => "ProjectV2ItemFieldSingleSelectValue"} = value ->
+        Map.get(priority_field.priority_by_option_id, value["optionId"]) ||
+          Map.get(priority_field.priority_by_option_name, value["name"])
+
+      _ ->
+        nil
+    end
+  end
+
+  defp extract_priority(_item, _contract), do: nil
+
+  # Normalize branch metadata from a linked GitHub issue.
+  #
+  # Returns the branch name when exactly one linked branch exists, otherwise `nil`.
+  defp extract_branch_name(issue_content) when is_map(issue_content) do
+    branch_count = issue_content |> get_in(["linkedBranches", "totalCount"])
+
+    case branch_count do
+      1 ->
+        issue_content
+        |> get_in(["linkedBranches", "nodes"])
+        |> List.wrap()
+        |> Enum.at(0)
+        |> then(fn
+          %{"ref" => %{"name" => branch_name}} when is_binary(branch_name) -> branch_name
+          _ -> nil
+        end)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp extract_branch_name(_issue_content), do: nil
+
+  # Normalize blockers from GitHub issue dependencies and board state.
+  #
+  # Fully paginates the blocker connection, resolves same-board blocker status,
+  # and falls back to GitHub-native issue state only when the blocker is not on
+  # the configured board.
+  #
+  # Returns `{:ok, blockers}` or `{:error, reason}`.
+  defp extract_blockers(issue_content, tracker, contract, request_fun) when is_map(issue_content) do
+    with {:ok, blocker_nodes} <- load_blocker_nodes(issue_content, tracker, request_fun),
+         {:ok, blockers} <- normalize_blocker_refs(blocker_nodes),
+         {:ok, resolved_blockers} <- resolve_blocker_states(blockers, tracker, contract, request_fun) do
+      {:ok, resolved_blockers}
+    end
+  end
+
+  defp extract_blockers(_issue_content, _tracker, _contract, _request_fun), do: {:ok, []}
+
+  # Load the full blocker connection for one issue.
+  #
+  # Returns `{:ok, blocker_nodes}` or `{:error, reason}`.
+  defp load_blocker_nodes(issue_content, tracker, request_fun) do
+    blocker_nodes = issue_content |> get_in(["blockedBy", "nodes"]) |> List.wrap()
+    total_count = issue_content |> get_in(["blockedBy", "totalCount"])
+    page_info = issue_content |> get_in(["blockedBy", "pageInfo"])
+
+    cond do
+      not is_integer(total_count) or total_count <= length(blocker_nodes) ->
+        {:ok, blocker_nodes}
+
+      page_info["hasNextPage"] == true and is_binary(page_info["endCursor"]) and page_info["endCursor"] != "" ->
+        issue_id = Map.get(issue_content, "id")
+        fetch_blocker_pages(issue_id, page_info["endCursor"], blocker_nodes, tracker, request_fun)
+
+      page_info["hasNextPage"] == true ->
+        {:error, :github_projects_missing_end_cursor}
+
+      true ->
+        {:ok, blocker_nodes}
+    end
+  end
+
+  # Fetch remaining blocker pages for one issue.
+  #
+  # Returns `{:ok, blocker_nodes}` or `{:error, reason}`.
+  defp fetch_blocker_pages(issue_id, after_cursor, acc_nodes, tracker, request_fun)
+       when is_binary(issue_id) and is_binary(after_cursor) do
+    variables = %{issueId: issue_id, after: after_cursor}
+
+    with {:ok, response} <-
+           graphql(blocker_page_query(), variables,
+             tracker: tracker,
+             request_fun: request_fun,
+             operation_name: "OvertureIssueBlockedByPage"
+           ),
+         {:ok, nodes, page_info} <- decode_blocker_page(response) do
+      updated_nodes = acc_nodes ++ nodes
+
+      cond do
+        page_info.has_next_page == true and is_binary(page_info.end_cursor) and page_info.end_cursor != "" ->
+          fetch_blocker_pages(issue_id, page_info.end_cursor, updated_nodes, tracker, request_fun)
+
+        page_info.has_next_page == true ->
+          {:error, :github_projects_missing_end_cursor}
+
+        true ->
+          {:ok, updated_nodes}
+      end
+    end
+  end
+
+  defp fetch_blocker_pages(_issue_id, _after_cursor, _acc_nodes, _tracker, _request_fun) do
+    {:error, :github_projects_missing_issue_content_id}
+  end
+
+  # Decode one blocker pagination page.
+  #
+  # Returns `{:ok, blocker_nodes, page_info}` or `{:error, reason}`.
+  defp decode_blocker_page(%{"errors" => errors}), do: {:error, {:github_graphql_errors, errors}}
+
+  defp decode_blocker_page(%{"data" => %{"node" => %{"blockedBy" => %{"nodes" => nodes, "pageInfo" => page_info}}}}) do
+    {:ok, List.wrap(nodes), %{has_next_page: page_info["hasNextPage"] == true, end_cursor: page_info["endCursor"]}}
+  end
+
+  defp decode_blocker_page(_response), do: {:error, :github_projects_unknown_payload}
+
+  # Normalize raw blocker nodes into sortable blocker refs.
+  #
+  # Returns `{:ok, blockers}` or `{:error, reason}`.
+  defp normalize_blocker_refs(blocker_nodes) when is_list(blocker_nodes) do
+    blockers =
+      blocker_nodes
+      |> Enum.reduce_while([], fn blocker_node, acc ->
+        case normalize_blocker_ref(blocker_node) do
+          {:ok, blocker} -> {:cont, [blocker | acc]}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+
+    case blockers do
+      {:error, reason} ->
+        {:error, reason}
+
+      normalized ->
+        {:ok,
+         normalized
+         |> Enum.reverse()
+         |> Enum.sort_by(fn blocker -> {blocker.identifier, blocker.id} end)}
+    end
+  end
+
+  defp normalize_blocker_refs(_blocker_nodes), do: {:ok, []}
+
+  # Normalize one blocker node to a provider-neutral blocker ref.
+  #
+  # Returns `{:ok, blocker}` or `{:error, reason}`.
+  defp normalize_blocker_ref(%{"id" => blocker_id, "number" => blocker_number, "repository" => %{"nameWithOwner" => repository}, "state" => blocker_state})
+       when is_binary(blocker_id) and is_integer(blocker_number) and is_binary(repository) and is_binary(blocker_state) do
+    {:ok,
+     %{
+       id: blocker_id,
+       identifier: "#{repository}##{blocker_number}",
+       state: blocker_state,
+       native_state: blocker_state
+     }}
+  end
+
+  defp normalize_blocker_ref(_blocker_node), do: {:error, :github_projects_invalid_blocker}
+
+  # Resolve blocker states using board status when the blocker is on the configured board.
+  #
+  # Returns `{:ok, blockers}` or `{:error, reason}`.
+  defp resolve_blocker_states([], _tracker, _contract, _request_fun), do: {:ok, []}
+
+  defp resolve_blocker_states(blockers, tracker, contract, request_fun) do
+    blocker_ids = Enum.map(blockers, & &1.id)
+    variables = %{ids: blocker_ids, statusFieldName: contract.status_field.name}
+
+    with {:ok, response} <-
+           graphql(blocker_project_items_query(), variables,
+             tracker: tracker,
+             request_fun: request_fun,
+             operation_name: "OvertureBlockerProjectItems"
+           ),
+         {:ok, blocker_nodes} <- decode_blocker_project_items(response) do
+      blocker_nodes_by_id =
+        blocker_nodes
+        |> Enum.reduce(%{}, fn blocker_node, acc -> Map.put(acc, blocker_node["id"], blocker_node) end)
+
+      blockers
+      |> Enum.reduce_while({:ok, []}, fn blocker, {:ok, acc} ->
+        case resolve_blocker_state(blocker, Map.get(blocker_nodes_by_id, blocker.id), tracker, contract, request_fun) do
+          {:ok, resolved_blocker} -> {:cont, {:ok, [resolved_blocker | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, resolved_blockers} ->
+          {:ok,
+           resolved_blockers
+           |> Enum.reverse()
+           |> Enum.sort_by(fn blocker -> {blocker.identifier, blocker.id} end)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  # Decode a blocker board-state lookup response.
+  #
+  # Returns `{:ok, blocker_issue_nodes}` or `{:error, reason}`.
+  defp decode_blocker_project_items(%{"errors" => errors}), do: {:error, {:github_graphql_errors, errors}}
+
+  defp decode_blocker_project_items(%{"data" => %{"nodes" => nodes}}) when is_list(nodes) do
+    blocker_nodes =
+      Enum.flat_map(nodes, fn
+        %{"__typename" => "Issue"} = blocker_node -> [blocker_node]
+        _other -> []
+      end)
+
+    {:ok, blocker_nodes}
+  end
+
+  defp decode_blocker_project_items(_response), do: {:error, :github_projects_unknown_payload}
+
+  # Resolve one blocker to its final normalized state.
+  #
+  # Returns `{:ok, blocker}` or `{:error, reason}`.
+  defp resolve_blocker_state(blocker, nil, _tracker, _contract, _request_fun) do
+    {:error, {:github_projects_blocker_lookup_failed, blocker.identifier}}
+  end
+
+  defp resolve_blocker_state(blocker, blocker_node, tracker, contract, request_fun) do
+    case resolve_blocker_board_state(blocker.id, blocker_node, tracker, contract, request_fun) do
+      {:ok, {:board_status, status_name}} ->
+        {:ok, blocker |> Map.put(:state, status_name) |> Map.delete(:native_state)}
+
+      {:ok, :not_on_board} ->
+        fallback_state = normalize_optional_string(Map.get(blocker, :native_state)) || Map.get(blocker_node, "state")
+        {:ok, blocker |> Map.put(:state, fallback_state) |> Map.delete(:native_state)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Resolve board status for one blocker issue across paginated project items.
+  #
+  # Returns `{:ok, {:board_status, status_name} | :not_on_board}` or `{:error, reason}`.
+  defp resolve_blocker_board_state(blocker_issue_id, blocker_node, tracker, contract, request_fun) do
+    project_items = get_in(blocker_node, ["projectItems", "nodes"]) |> List.wrap()
+    page_info = get_in(blocker_node, ["projectItems", "pageInfo"]) || %{}
+
+    case find_project_item_for_project(project_items, contract.project_id) do
+      {:ok, project_item} ->
+        blocker_status_from_project_item(project_item, contract)
+
+      :not_found ->
+        cond do
+          page_info["hasNextPage"] == true and is_binary(page_info["endCursor"]) and page_info["endCursor"] != "" ->
+            fetch_blocker_project_items_page(blocker_issue_id, page_info["endCursor"], tracker, contract, request_fun)
+
+          page_info["hasNextPage"] == true ->
+            {:error, :github_projects_missing_end_cursor}
+
+          true ->
+            {:ok, :not_on_board}
+        end
+    end
+  end
+
+  # Fetch remaining blocker project-item pages until the configured board is found.
+  #
+  # Returns `{:ok, {:board_status, status_name} | :not_on_board}` or `{:error, reason}`.
+  defp fetch_blocker_project_items_page(blocker_issue_id, after_cursor, tracker, contract, request_fun)
+       when is_binary(blocker_issue_id) and is_binary(after_cursor) do
+    variables = %{issueId: blocker_issue_id, statusFieldName: contract.status_field.name, after: after_cursor}
+
+    with {:ok, response} <-
+           graphql(blocker_project_items_page_query(), variables,
+             tracker: tracker,
+             request_fun: request_fun,
+             operation_name: "OvertureBlockerProjectItemsPage"
+           ),
+         {:ok, project_items, page_info} <- decode_blocker_project_items_page(response) do
+      case find_project_item_for_project(project_items, contract.project_id) do
+        {:ok, project_item} ->
+          blocker_status_from_project_item(project_item, contract)
+
+        :not_found when page_info.has_next_page == true and is_binary(page_info.end_cursor) and page_info.end_cursor != "" ->
+          fetch_blocker_project_items_page(blocker_issue_id, page_info.end_cursor, tracker, contract, request_fun)
+
+        :not_found when page_info.has_next_page == true ->
+          {:error, :github_projects_missing_end_cursor}
+
+        :not_found ->
+          {:ok, :not_on_board}
+      end
+    end
+  end
+
+  defp fetch_blocker_project_items_page(_blocker_issue_id, _after_cursor, _tracker, _contract, _request_fun) do
+    {:error, :github_projects_missing_issue_content_id}
+  end
+
+  # Decode one blocker project-item page.
+  #
+  # Returns `{:ok, project_items, page_info}` or `{:error, reason}`.
+  defp decode_blocker_project_items_page(%{"errors" => errors}), do: {:error, {:github_graphql_errors, errors}}
+
+  defp decode_blocker_project_items_page(%{"data" => %{"node" => %{"projectItems" => %{"nodes" => nodes, "pageInfo" => page_info}}}}) do
+    {:ok, List.wrap(nodes), %{has_next_page: page_info["hasNextPage"] == true, end_cursor: page_info["endCursor"]}}
+  end
+
+  defp decode_blocker_project_items_page(_response), do: {:error, :github_projects_unknown_payload}
+
+  # Find the project item for the configured board from a list of project items.
+  #
+  # Returns `{:ok, project_item}` or `:not_found`.
+  defp find_project_item_for_project(project_items, project_id) when is_list(project_items) and is_binary(project_id) do
+    case Enum.find(project_items, fn
+           %{"project" => %{"id" => ^project_id}} -> true
+           _project_item -> false
+         end) do
+      %{} = project_item -> {:ok, project_item}
+      nil -> :not_found
+    end
+  end
+
+  defp find_project_item_for_project(_project_items, _project_id), do: :not_found
+
+  # Extract a readable board status from a blocker project item.
+  #
+  # Returns `{:ok, {:board_status, status_name}}` or `{:error, reason}`.
+  defp blocker_status_from_project_item(project_item, contract) do
+    case Map.get(project_item, "fieldValueByName") do
+      %{"__typename" => "ProjectV2ItemFieldSingleSelectValue", "name" => status_name}
+      when is_binary(status_name) and status_name != "" ->
+        {:ok, {:board_status, status_name}}
+
+      _ ->
+        {:error, {:github_projects_blocker_missing_status, contract.status_field.name}}
+    end
+  end
+
+  # Normalize an optional string value for internal comparisons.
+  #
+  # Returns the trimmed string or `nil`.
+  defp normalize_optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_optional_string(_value), do: nil
+
+  # Ensure the Issue.stateReason field still exposes the expected argument.
+  #
+  # Returns `:ok` or `{:error, reason}`.
+  defp ensure_issue_state_reason_contract(%{"errors" => errors}), do: {:error, {:github_graphql_errors, errors}}
+
+  defp ensure_issue_state_reason_contract(%{"data" => %{"issueType" => %{"fields" => fields}}}) when is_list(fields) do
+    case Enum.find(fields, &(&1["name"] == "stateReason")) do
+      %{"args" => args} when is_list(args) ->
+        if Enum.any?(args, &(&1["name"] == "enableDuplicate")) do
+          :ok
+        else
+          {:error, {:github_schema_contract_mismatch, :issue_state_reason_missing_enable_duplicate}}
+        end
+
+      _ ->
+        {:error, {:github_schema_contract_mismatch, :issue_state_reason_missing}}
+    end
+  end
+
+  defp ensure_issue_state_reason_contract(_response) do
+    {:error, {:github_schema_contract_mismatch, :issue_type_introspection_failed}}
+  end
+
+  # Ensure the closeIssue input still uses GitHub's closed-state enum.
+  #
+  # Returns `:ok` or `{:error, reason}`.
+  defp ensure_close_issue_input_contract(%{"data" => %{"closeIssueInputType" => %{"inputFields" => input_fields}}})
+       when is_list(input_fields) do
+    case Enum.find(input_fields, &(&1["name"] == "stateReason")) do
+      %{"type" => %{"name" => "IssueClosedStateReason"}} ->
+        :ok
+
+      %{"type" => %{"ofType" => %{"name" => "IssueClosedStateReason"}}} ->
+        :ok
+
+      %{"type" => type_info} ->
+        {:error, {:github_schema_contract_mismatch, {:close_issue_input_state_reason_type, type_info}}}
+
+      nil ->
+        {:error, {:github_schema_contract_mismatch, :close_issue_input_state_reason_missing}}
+    end
+  end
+
+  defp ensure_close_issue_input_contract(_response) do
+    {:error, {:github_schema_contract_mismatch, :close_issue_input_introspection_failed}}
+  end
+
+  # Ensure the GitHub closed-state enum still exposes the supported values.
+  #
+  # Returns `:ok` or `{:error, reason}`.
+  defp ensure_issue_closed_state_reason_values(%{"data" => %{"issueClosedStateReasonType" => %{"enumValues" => enum_values}}})
+       when is_list(enum_values) do
+    enum_names =
+      enum_values
+      |> Enum.map(& &1["name"])
+      |> Enum.filter(&is_binary/1)
+      |> MapSet.new()
+
+    expected_names = MapSet.new(@issue_closed_state_reasons)
+
+    if MapSet.subset?(expected_names, enum_names) do
+      :ok
+    else
+      {:error, {:github_schema_contract_mismatch, {:issue_closed_state_reason_values, MapSet.to_list(enum_names)}}}
+    end
+  end
+
+  defp ensure_issue_closed_state_reason_values(_response) do
+    {:error, {:github_schema_contract_mismatch, :issue_closed_state_reason_introspection_failed}}
   end
 
   # Build the public issue identifier for a linked GitHub issue.
