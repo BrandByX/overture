@@ -225,7 +225,8 @@ Use this only when completion is blocked by missing required tools or missing au
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
-    - If app-touching, use repo-provided runtime validation and QA evidence tooling when it exists.
+    - If app-touching, use the repo-provided isolated browser QA tooling when it exists.
+    - Repos that implement browser QA should expose `.codex/skills/browser-qa/SKILL.md`; do not fall back to host-browser or desktop screenshot capture for final QA evidence.
     - If the repo does not yet ship dedicated app-launch or media-upload tooling, run the best available app-specific validation path you can support in-session and record the evidence plus any remaining limitations in the workpad.
 6.  Re-check all acceptance criteria and close any gaps.
 7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
@@ -284,7 +285,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - PR feedback sweep is complete and no actionable comments remain.
 - PR checks are green, branch is pushed, and PR is linked on the issue.
 - Required PR metadata is present (`symphony` label).
-- If app-touching, the repo's documented runtime validation and QA evidence requirements are complete, or the workpad clearly records the best available validation proof plus any remaining tooling gap.
+- If app-touching, the repo's documented runtime validation and isolated browser QA requirements are complete, or the workpad clearly records the best available validation proof plus any remaining tooling gap.
 
 ## Guardrails
 
