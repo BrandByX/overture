@@ -43,6 +43,7 @@ The target runtime contract supports:
 - every configured priority value must be an integer in `1..4`
 - `tracker.assignee`, when present, must be an explicit GitHub login
 - `tracker.assignee: me` must fail validation clearly
+- `tracker.active_states` must not include `Human Review`; it is a manual handoff state
 
 ## Workflow field semantics
 
@@ -59,6 +60,11 @@ Target options:
 - `Done`
 - `Cancelled`
 - `Duplicate`
+
+Shipped workflow usage:
+
+- active work states: `Todo`, `In Progress`, `Rework`, `Merging`
+- manual handoff state: `Human Review`
 
 Priority is optional and board-configured.
 
@@ -101,6 +107,13 @@ The runtime writes to two different GitHub objects:
 
 - comments go to the linked issue via `content_id`
 - workflow state changes go to the project item via `id`
+
+## Operations note
+
+- GitHub issue and project mutations are attributed to whichever account owns
+  the configured tracker token.
+- Use a dedicated service account or GitHub App token when automation
+  attribution must remain distinct from human operators.
 
 ## Close reason mapping
 

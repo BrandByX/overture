@@ -117,6 +117,7 @@ defmodule SymphonyElixir.Config do
 
   defp validate_semantics(settings) do
     normalized_tracker_assignee = normalize_tracker_assignee(settings.tracker.assignee)
+    normalized_active_states = normalize_tracker_active_states(settings.tracker.active_states)
     priority_field_name = normalize_optional_string(settings.tracker.priority_field_name)
     priority_option_map = settings.tracker.priority_option_map
 
@@ -157,6 +158,9 @@ defmodule SymphonyElixir.Config do
       settings.tracker.kind == "github_projects" and normalized_tracker_assignee == "me" ->
         {:error, {:invalid_workflow_config, "tracker.assignee: me is not supported for github_projects; use an explicit GitHub login"}}
 
+      settings.tracker.kind == "github_projects" and human_review_active?(normalized_active_states) ->
+        {:error, {:invalid_workflow_config, "tracker.active_states must not include Human Review; it is a manual handoff state"}}
+
       true ->
         validate_tracker_backend(settings)
     end
@@ -181,6 +185,30 @@ defmodule SymphonyElixir.Config do
   end
 
   defp normalize_tracker_assignee(_assignee), do: nil
+
+  # Normalize configured active state names for semantic validation.
+  #
+  # Downcases each string state name so validation can reject reserved workflow
+  # states regardless of YAML capitalization.
+  #
+  # Returns the normalized state-name list.
+  defp normalize_tracker_active_states(active_states) when is_list(active_states) do
+    Enum.map(active_states, &Schema.normalize_issue_state/1)
+  end
+
+  defp normalize_tracker_active_states(_active_states), do: []
+
+  # Detect whether the workflow incorrectly treats Human Review as active.
+  #
+  # `Human Review` is a manual handoff state in the shipped GitHub workflow and
+  # must not appear in `tracker.active_states`.
+  #
+  # Returns `true` when `Human Review` is configured as active.
+  defp human_review_active?(active_states) when is_list(active_states) do
+    Enum.any?(active_states, &(&1 == "human review"))
+  end
+
+  defp human_review_active?(_active_states), do: false
 
   # Normalize an optional workflow string setting.
   #

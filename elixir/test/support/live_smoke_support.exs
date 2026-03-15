@@ -26,7 +26,7 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   @pull_request_page_size 20
   @marker_file_name "overture-live-smoke-marker.txt"
   @trace_file_name "overture-live-smoke.trace"
-  @active_states ["Todo", "In Progress", "Human Review", "Rework", "Merging"]
+  @active_states ["Todo", "In Progress", "Rework", "Merging"]
   @terminal_states ["Done", "Cancelled", "Duplicate"]
   @bootstrap_query """
   query OvertureLiveSmokeBootstrap(
@@ -416,6 +416,34 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       hold_codex_binary: hold_codex_binary,
       bootstrap: bootstrap
     }
+  end
+
+  @doc """
+  Write a deterministic fake Codex binary that moves one issue to one status.
+
+  Uses the normal app-server protocol, leaves the standard marker comment, and
+  updates the requested project status. Closing the linked issue is optional so
+  smoke scenarios can model both handoff and terminal transitions.
+
+  Returns `:ok`.
+  """
+  @spec write_status_codex!(map(), map(), String.t(), keyword()) :: :ok
+  def write_status_codex!(context, issue_fixture, status_name, opts \\ [])
+      when is_map(context) and is_map(issue_fixture) and is_binary(status_name) and is_list(opts) do
+    close_issue? = Keyword.get(opts, :close_issue?, false)
+
+    write_fake_codex!(
+      context.codex_binary,
+      context.trace_file,
+      context.marker_content,
+      issue_fixture,
+      context.bootstrap.status_field,
+      context.bootstrap.project_id,
+      target_status_name: status_name,
+      close_issue?: close_issue?
+    )
+
+    :ok
   end
 
   @doc """
@@ -918,6 +946,37 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   end
 
   @doc """
+  Wait until one live smoke project item reaches one workflow state.
+
+  Polls the live sandbox board until the target project item reports the
+  requested status name. Use this to prove handoff states settle before making
+  follow-on runtime assertions.
+
+  Returns `:ok`.
+  """
+  @spec wait_for_project_item_state!(map(), String.t(), String.t(), keyword()) :: :ok
+  def wait_for_project_item_state!(context, item_id, status_name, opts \\ [])
+      when is_map(context) and is_binary(item_id) and is_binary(status_name) and is_list(opts) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, 10_000)
+    interval_ms = Keyword.get(opts, :interval_ms, 100)
+
+    wait_until!(
+      fn ->
+        if project_item_state(context, item_id) == status_name do
+          :ok
+        else
+          false
+        end
+      end,
+      timeout_ms,
+      interval_ms,
+      "Timed out waiting for the live smoke item #{item_id} to reach #{status_name}."
+    )
+
+    :ok
+  end
+
+  @doc """
   Assert that the PR-linked project item stayed non-runnable.
 
   The smoke run should leave the PR-backed item in the same status it had
@@ -1178,7 +1237,17 @@ defmodule SymphonyElixir.LiveSmokeSupport do
   # item into `Done`.
   #
   # Returns `:ok`.
-  defp write_fake_codex!(path, trace_file, marker_content, issue_fixture, status_field, project_id) do
+  defp write_fake_codex!(path, trace_file, marker_content, issue_fixture, status_field, project_id, opts \\ []) do
+    target_status_name = Keyword.get(opts, :target_status_name, "Done")
+    close_issue? = Keyword.get(opts, :close_issue?, target_status_name == "Done")
+
+    status_call_id =
+      if target_status_name == "Done" and close_issue? do
+        "call-live-smoke-done"
+      else
+        "call-live-smoke-status"
+      end
+
     comment_call =
       Jason.encode!(%{
         "id" => 101,
@@ -1199,13 +1268,13 @@ defmodule SymphonyElixir.LiveSmokeSupport do
         }
       })
 
-    done_call =
+    status_call =
       Jason.encode!(%{
         "id" => 102,
         "method" => "item/tool/call",
         "params" => %{
           "name" => "github_graphql",
-          "callId" => "call-live-smoke-done",
+          "callId" => status_call_id,
           "threadId" => "thread-live-smoke",
           "turnId" => "turn-live-smoke",
           "arguments" => %{
@@ -1216,7 +1285,7 @@ defmodule SymphonyElixir.LiveSmokeSupport do
               "projectId" => project_id,
               "itemId" => issue_fixture.item_id,
               "fieldId" => status_field.id,
-              "optionId" => status_field.option_ids_by_name["Done"]
+              "optionId" => status_field.option_ids_by_name[target_status_name]
             }
           }
         }
@@ -1277,15 +1346,26 @@ defmodule SymphonyElixir.LiveSmokeSupport do
           emit_json '#{comment_call}'
           ;;
         5)
-          emit_json '#{done_call}'
+          emit_json '#{status_call}'
           ;;
-        6)
-          emit_json '#{close_call}'
-          ;;
-        7)
-          emit_json '#{completed_response}'
-          exit 0
-          ;;
+    #{if close_issue? do
+      """
+            6)
+              emit_json '#{close_call}'
+              ;;
+            7)
+              emit_json '#{completed_response}'
+              exit 0
+              ;;
+      """
+    else
+      """
+            6)
+              emit_json '#{completed_response}'
+              exit 0
+              ;;
+      """
+    end}
         *)
           exit 0
           ;;
