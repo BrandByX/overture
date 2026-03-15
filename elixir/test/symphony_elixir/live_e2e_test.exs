@@ -72,6 +72,41 @@ defmodule SymphonyElixir.LiveE2ETest do
     assert LiveSmokeSupport.pr_item_state!(context) == expected_pr_state
   end
 
+  test "github projects live smoke settles once work is handed off to Human Review" do
+    runtime_context = LiveSmokeSupport.create_runtime_context!()
+    issue_fixture = LiveSmokeSupport.create_issue_fixture!(runtime_context, title_prefix: "Overture live smoke human review", status_name: "Todo")
+    context = Map.put(runtime_context, :issue, issue_fixture)
+    :ok = LiveSmokeSupport.write_status_codex!(context, issue_fixture, "Human Review")
+
+    write_live_workflow!(context)
+    :ok = LiveSmokeSupport.verify_schema_contract!()
+
+    orchestrator_name = Module.concat(__MODULE__, HumanReviewSmokeOrchestrator)
+    {:ok, orchestrator_pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(orchestrator_pid) do
+        Process.exit(orchestrator_pid, :normal)
+      end
+
+      LiveSmokeSupport.cleanup_issue_fixture!(context, issue_fixture)
+      LiveSmokeSupport.cleanup_runtime!(context)
+    end)
+
+    assert LiveSmokeSupport.wait_for_claimed_issue!(orchestrator_pid, issue_fixture.item_id) ==
+             issue_fixture.item_id
+
+    :ok = LiveSmokeSupport.wait_for_project_item_state!(context, issue_fixture.item_id, "Human Review")
+    :ok = LiveSmokeSupport.wait_for_orchestrator_idle!(orchestrator_pid, context, timeout_ms: 10_000)
+
+    refute Enum.any?(LiveSmokeSupport.fetch_candidate_issues!(), &(&1.id == issue_fixture.item_id))
+
+    trace = File.read!(context.trace_file)
+    assert trace =~ "call-live-smoke-comment"
+    assert trace =~ "call-live-smoke-status"
+    refute trace =~ "call-live-smoke-close"
+  end
+
   test "github projects live smoke keeps same-board Todo work blocked until the blocker reaches Done" do
     context = LiveSmokeSupport.create_runtime_context!()
     blocker = LiveSmokeSupport.create_issue_fixture!(context, title_prefix: "Overture live smoke blocker", status_name: "Backlog")

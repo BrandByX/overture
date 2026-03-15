@@ -379,7 +379,8 @@ Fields:
   - Optional explicit GitHub login filter.
   - `me` is intentionally unsupported in v1.
 - `active_states` (list of strings)
-  - Default: `Todo`, `In Progress`, `Human Review`, `Rework`, `Merging`
+  - Default: `Todo`, `In Progress`
+  - `Human Review` is invalid here because it is a manual handoff state.
 - `terminal_states` (list of strings)
   - Default: `Done`, `Cancelled`, `Duplicate`
 
@@ -590,7 +591,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.repository`: string, required in `owner/repo` form when `tracker.kind=github_projects`
 - `tracker.status_field_name`: string, default `Status`, must resolve to `ProjectV2SingleSelectField`
 - `tracker.assignee`: explicit GitHub login or null; `me` is invalid in v1
-- `tracker.active_states`: list of strings, default `["Todo", "In Progress", "Human Review", "Rework", "Merging"]`
+- `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Done", "Cancelled", "Duplicate"]`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/symphony_workspaces`
@@ -1218,6 +1219,7 @@ GitHub Projects-specific requirements for `tracker.kind == "github_projects"`:
 - `tracker.priority_field_name` must not match `tracker.status_field_name`
 - `tracker.priority_option_map` is only valid when `tracker.priority_field_name` resolves to a
   single-select field
+- `tracker.active_states` must not include `Human Review`; it is a manual handoff state
 - Candidate issue query filters to issue-backed project items whose current project `Status`
   appears in `tracker.active_states`
 - PR-linked project items, draft items, redacted items, archived items, and wrong-repo items are

@@ -55,7 +55,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:priority_field_name, :string)
       field(:priority_option_map, :map)
       field(:assignee, :string)
-      field(:active_states, {:array, :string}, default: ["Todo", "In Progress", "Human Review", "Rework", "Merging"])
+      field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Done", "Cancelled", "Duplicate"])
     end
 

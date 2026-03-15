@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.TestSupport do
   @workflow_prompt "You are an agent for this repository."
-  @default_tracker_active_states ["Todo", "In Progress", "Human Review", "Rework", "Merging"]
+  @default_tracker_active_states ["Todo", "In Progress"]
   @default_tracker_terminal_states ["Done", "Cancelled", "Duplicate"]
   defmodule FakeGitHubProjectsClient do
     @moduledoc false
