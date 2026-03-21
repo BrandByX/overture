@@ -169,6 +169,10 @@ The agent should be able to talk to the configured tracker. If the required trac
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
+    - Add and fill a `### Browser QA Plan` section before implementation starts:
+      - use `Status: Required` only when acceptance depends on browser-rendered UI, browser navigation, visible browser state, or browser interaction proof
+      - use `Status: Not applicable` for backend, API, runtime, billing, schema, test, or docs work whose acceptance does not depend on browser-visible behavior
+      - when `Status: Required`, list at least one selected still or video target and what each one proves
 7.  Run a principal-style self-review of the plan and refine it in the comment.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
 9.  Run the `pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
@@ -227,7 +231,7 @@ Use this only when completion is blocked by missing required tools or missing au
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
-    - If app-touching, use the repo-provided isolated browser QA tooling when it exists.
+    - When the workpad `### Browser QA Plan` is `Required`, use the repo-provided isolated browser QA tooling for the selected stills and videos only.
     - Repos that implement browser QA should expose `.codex/skills/browser-qa/SKILL.md`; do not fall back to host-browser or desktop screenshot capture for final QA evidence.
     - If the repo does not yet ship dedicated app-launch or media-upload tooling, run the best available app-specific validation path you can support in-session and record the evidence plus any remaining limitations in the workpad.
 6.  Re-check all acceptance criteria and close any gaps.
@@ -245,12 +249,14 @@ Use this only when completion is blocked by missing required tools or missing au
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
 11. Before moving to `Human Review`, poll PR feedback and checks:
-    - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
     - Confirm PR checks are passing (green) after the latest changes.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
+    - Confirm the workpad `### Browser QA Plan` is satisfied:
+      - when `Status: Required`, the selected evidence is captured and reflected in the PR evidence comment
+      - when `Status: Not applicable`, no browser QA run is required
     - Repeat this check-address-verify loop until no outstanding comments remain and checks are fully passing.
-    - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
+    - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, `Browser QA Plan`, and `Validation` exactly match completed work.
 12. Only then move issue to `Human Review`.
     - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
 13. For `Todo` tickets that already had a PR attached at kickoff:
@@ -286,7 +292,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - PR feedback sweep is complete and no actionable comments remain.
 - PR checks are green, branch is pushed, and PR is linked on the issue.
 - Required PR metadata is present (`symphony` label).
-- If app-touching, the repo's documented runtime validation and isolated browser QA requirements are complete, or the workpad clearly records the best available validation proof plus any remaining tooling gap.
+- If the workpad `### Browser QA Plan` is `Required`, the repo's documented runtime validation and the selected isolated browser QA evidence are complete, or the workpad clearly records the best available validation proof plus any remaining tooling gap.
 
 ## Guardrails
 
@@ -331,6 +337,16 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 
 - [ ] Criterion 1
 - [ ] Criterion 2
+
+### Browser QA Plan
+
+- Status: Not applicable | Required
+- Reason: <why browser evidence is or is not required>
+- Stills:
+  - `catalog:<name>` -> proves <ticket-specific behavior>
+  - `ad-hoc:<name>` route `<route>` auth `<profile-or-none>` expected path `<path>` expected query `<query-or-none>` -> proves <ticket-specific behavior>
+- Videos:
+  - `catalog:<name>` -> proves <ticket-specific behavior>
 
 ### Validation
 
