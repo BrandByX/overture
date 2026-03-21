@@ -46,6 +46,7 @@ also live under the same runtime root.
 - Do not use host-browser screenshots as browser QA evidence.
 - Do not use environment screenshot tooling as a browser QA fallback.
 - Do not use page-only CDP screenshots as final QA evidence.
-- Do not assume any repo-wide default screenshot trio; select evidence per
-  ticket from the repo catalog.
+- Do not assume any repo-wide default screenshot set. Select evidence per
+  ticket based on the changed behavior, using repo catalog entries only when
+  they are a good reusable fit.
 - Keep one persistent PR comment headed `## Manual QA Evidence`.
