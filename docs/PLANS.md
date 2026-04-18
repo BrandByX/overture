@@ -1,6 +1,7 @@
 # Overture Plans
 
 Created: 2026-03-12
+Updated: 2026-04-17
 
 ## Program boards
 
@@ -8,9 +9,18 @@ Created: 2026-03-12
 - Sandbox board: <https://github.com/orgs/BrandByX/projects/5>
 - Live board metadata: `references/github-projects-board-metadata.md`
 
-## Active execution plan
+## Active execution plans
 
 - `exec-plans/active/overture-github-projects-migration.md`
+- `exec-plans/active/overture-upstream-sync-round-1/overture-upstream-sync-round-1.md`
+
+## Upstream sync round 1
+
+- Epic: `exec-plans/active/overture-upstream-sync-round-1/overture-upstream-sync-round-1.md`
+- Workstream sequence:
+  - `exec-plans/active/overture-upstream-sync-round-1/overture-upstream-sync-57-workflow-ref-pinning.md`
+  - `exec-plans/active/overture-upstream-sync-round-1/overture-upstream-sync-50-codex-stream-parsing.md`
+  - `exec-plans/active/overture-upstream-sync-round-1/overture-upstream-sync-54-single-host-retries.md`
 
 ## Delivery issues
 

@@ -13,6 +13,7 @@ This directory holds the canonical migration and design docs for the Overture fo
 - `product-specs/`: target runtime and tracker contract
 - `references/`: live environment metadata and operator-facing reference values, including the live smoke runbook
 - `exec-plans/active/`: active implementation sequencing
+- `known-issues/`: documented baseline limitations and currently accepted repo issues
 
 ## Start here
 
