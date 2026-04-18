@@ -161,6 +161,9 @@ Notes:
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
+- When `worker.ssh_hosts` is configured, Overture keeps each agent run on one selected SSH host.
+  If startup fails on that host, the orchestrator schedules the retry instead of silently hopping
+  to another host during the same run.
 - `tracker.api_key` reads from `GITHUB_TOKEN` when unset or when value is `$GITHUB_TOKEN`.
 - `tracker.status_field_name` must resolve to a `ProjectV2SingleSelectField`.
 - `tracker.priority_field_name` is optional:
