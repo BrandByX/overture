@@ -234,7 +234,7 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:error, :invalid_github_owner_type} ->
-        Logger.error("GitHub Projects owner_type must be \"organization\" or \"user\" in WORKFLOW.md")
+        Logger.error(~s(GitHub Projects owner_type must be "organization" or "user" in WORKFLOW.md))
         state
 
       {:error, :invalid_github_repository} ->

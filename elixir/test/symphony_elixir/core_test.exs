@@ -254,6 +254,45 @@ defmodule SymphonyElixir.CoreTest do
     assert {:error, {:github_projects_priority_field_not_found, "Unknown Priority"}} = Config.validate!()
   end
 
+  test "config validation preserves tracker semantic precedence across combined invalid settings" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: nil,
+      tracker_owner_type: "team",
+      tracker_owner_login: nil
+    )
+
+    assert {:error, :missing_tracker_kind} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_owner_type: "team",
+      tracker_owner_login: nil
+    )
+
+    assert {:error, :invalid_github_owner_type} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_owner_type: "organization",
+      tracker_owner_login: "BrandByX",
+      tracker_project_number: nil,
+      tracker_repository: nil
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.project_number"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_project_number: 6,
+      tracker_repository: "BrandByX/overture",
+      tracker_priority_field_name: nil,
+      tracker_priority_option_map: %{"P1" => 1},
+      tracker_assignee: "   "
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.priority_option_map requires tracker.priority_field_name"
+  end
+
   test "tracker assignee must be configured explicitly" do
     previous_github_assignee = System.get_env("GITHUB_ASSIGNEE")
     env_assignee = "sidney"

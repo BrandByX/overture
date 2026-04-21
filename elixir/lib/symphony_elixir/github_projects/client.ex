@@ -56,7 +56,9 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   }
   """
 
-  @type request_fun :: (map(), [{binary(), binary()}] -> {:ok, %{status: integer(), body: map() | binary()}} | {:error, term()})
+  @type request_fun ::
+          (map(), [{binary(), binary()}] ->
+             {:ok, %{status: integer(), body: map() | binary()}} | {:error, term()})
 
   @type project_contract :: %{
           project_id: String.t(),
@@ -275,9 +277,8 @@ defmodule SymphonyElixir.GitHubProjects.Client do
              operation_name: "OvertureGitHubSchemaContract"
            ),
          :ok <- ensure_issue_state_reason_contract(response),
-         :ok <- ensure_close_issue_input_contract(response),
-         :ok <- ensure_issue_closed_state_reason_values(response) do
-      :ok
+         :ok <- ensure_close_issue_input_contract(response) do
+      ensure_issue_closed_state_reason_values(response)
     end
   end
 
@@ -334,13 +335,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
         with {:ok, assignee_filter} <- routing_assignee_filter(tracker.assignee),
              {:ok, contract} <- fetch_project_contract(tracker, request_fun) do
           ids
-          |> Enum.chunk_every(@id_batch_size)
-          |> Enum.reduce_while({:ok, []}, fn batch_ids, {:ok, acc_issues} ->
-            case fetch_project_item_batch(batch_ids, tracker, contract, assignee_filter, request_fun) do
-              {:ok, batch_issues} -> {:cont, {:ok, acc_issues ++ batch_issues}}
-              {:error, reason} -> {:halt, {:error, reason}}
-            end
-          end)
+          |> load_issue_state_batches(tracker, contract, assignee_filter, request_fun)
           |> sort_issue_batch(ids)
         end
     end
@@ -383,9 +378,8 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   defp update_issue_state_with_tracker(%Issue{} = issue, state_name, tracker, request_fun) do
     with {:ok, contract} <- fetch_project_contract(tracker, request_fun),
          {:ok, option_id} <- status_option_id(contract, state_name),
-         :ok <- update_project_item_state(issue, contract, option_id, tracker, request_fun),
-         :ok <- reconcile_issue_state_after_write(issue, state_name, tracker, request_fun) do
-      :ok
+         :ok <- update_project_item_state(issue, contract, option_id, tracker, request_fun) do
+      reconcile_issue_state_after_write(issue, state_name, tracker, request_fun)
     end
   end
 
@@ -899,7 +893,9 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     }
 
     with {:ok, response} <-
-           graphql(project_items_query(contract.priority_field != nil), maybe_put_priority_field_name(variables, contract),
+           graphql(
+             project_items_query(contract.priority_field != nil),
+             maybe_put_priority_field_name(variables, contract),
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureProjectItems"
@@ -910,8 +906,17 @@ defmodule SymphonyElixir.GitHubProjects.Client do
       updated_acc = acc_issues ++ normalized_issues
 
       case page_info do
-        %{has_next_page: true, end_cursor: end_cursor} when is_binary(end_cursor) and end_cursor != "" ->
-          fetch_project_items_page(end_cursor, tracker, contract, requested_states, assignee_filter, request_fun, updated_acc)
+        %{has_next_page: true, end_cursor: end_cursor}
+        when is_binary(end_cursor) and end_cursor != "" ->
+          fetch_project_items_page(
+            end_cursor,
+            tracker,
+            contract,
+            requested_states,
+            assignee_filter,
+            request_fun,
+            updated_acc
+          )
 
         %{has_next_page: true} ->
           {:error, :github_projects_missing_end_cursor}
@@ -937,15 +942,15 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     }
 
     with {:ok, response} <-
-           graphql(project_items_by_id_query(contract.priority_field != nil), maybe_put_priority_field_name(variables, contract),
+           graphql(
+             project_items_by_id_query(contract.priority_field != nil),
+             maybe_put_priority_field_name(variables, contract),
              tracker: tracker,
              request_fun: request_fun,
              operation_name: "OvertureProjectItemsById"
            ),
-         {:ok, items} <- decode_project_item_batch(response),
-         {:ok, normalized_issues} <-
-           normalize_project_items(items, tracker, contract, nil, assignee_filter, request_fun) do
-      {:ok, normalized_issues}
+         {:ok, items} <- decode_project_item_batch(response) do
+      normalize_project_items(items, tracker, contract, nil, assignee_filter, request_fun)
     end
   end
 
@@ -959,17 +964,9 @@ defmodule SymphonyElixir.GitHubProjects.Client do
     issues =
       items
       |> Enum.reduce([], fn item, acc ->
-        case normalize_project_item(item, tracker, contract, assignee_filter, request_fun) do
-          {:ok, %Issue{} = issue} ->
-            if include_issue_state?(issue, requested_states) do
-              [issue | acc]
-            else
-              acc
-            end
-
-          :skip ->
-            acc
-        end
+        item
+        |> normalize_project_item(tracker, contract, assignee_filter, request_fun)
+        |> maybe_include_issue(acc, requested_states)
       end)
       |> Enum.reverse()
 
@@ -987,7 +984,16 @@ defmodule SymphonyElixir.GitHubProjects.Client do
          {:ok, state_name} <- project_item_state(item),
          {:ok, issue_content} <- issue_content(item),
          :ok <- ensure_issue_repository(issue_content, tracker.repository),
-         {:ok, issue} <- build_issue(item, issue_content, state_name, assignee_filter, tracker, contract, request_fun) do
+         {:ok, issue} <-
+           build_issue(
+             item,
+             issue_content,
+             state_name,
+             assignee_filter,
+             tracker,
+             contract,
+             request_fun
+           ) do
       reconcile_issue_for_read(issue, tracker, contract, request_fun)
     else
       true ->
@@ -1097,25 +1103,11 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   # Returns `{:ok, issue}` or `:skip`.
   defp reconcile_issue_for_read(%Issue{} = issue, tracker, _contract, request_fun) do
     cond do
-      active_issue_state?(issue.state, tracker) and issue.content_state == "CLOSED" and issue.assigned_to_worker ->
-        case reopen_issue(issue, tracker, request_fun) do
-          {:ok, reopened_issue} ->
-            {:ok, reopened_issue}
+      reopen_issue_for_read?(issue, tracker) ->
+        maybe_reopen_issue_for_read(issue, tracker, request_fun)
 
-          {:error, reason} ->
-            Logger.warning("Skipping issue after reopen failure: issue_id=#{issue.id} identifier=#{issue.identifier} reason=#{inspect(reason)}")
-            :skip
-        end
-
-      terminal_issue_state?(issue.state, tracker) and issue.content_state != "CLOSED" ->
-        case close_issue(issue, issue.state, tracker, request_fun) do
-          {:ok, closed_issue} ->
-            {:ok, closed_issue}
-
-          {:error, reason} ->
-            Logger.warning("Keeping terminal issue after close failure: issue_id=#{issue.id} identifier=#{issue.identifier} reason=#{inspect(reason)}")
-            {:ok, issue}
-        end
+      close_issue_for_read?(issue, tracker) ->
+        maybe_close_issue_for_read(issue, tracker, request_fun)
 
       true ->
         {:ok, issue}
@@ -1162,17 +1154,11 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   # Returns `:ok` or `{:error, reason}`.
   defp reconcile_issue_state_after_write(%Issue{} = issue, state_name, tracker, request_fun) do
     cond do
-      terminal_issue_state?(state_name, tracker) and issue.content_state != "CLOSED" ->
-        case close_issue(issue, state_name, tracker, request_fun) do
-          {:ok, _issue} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
+      close_issue_for_write?(issue, state_name, tracker) ->
+        maybe_close_issue_for_write(issue, state_name, tracker, request_fun)
 
-      active_issue_state?(state_name, tracker) and issue.content_state == "CLOSED" ->
-        case reopen_issue(issue, tracker, request_fun) do
-          {:ok, _issue} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
+      reopen_issue_for_write?(issue, state_name, tracker) ->
+        maybe_reopen_issue_for_write(issue, tracker, request_fun)
 
       true ->
         :ok
@@ -1452,26 +1438,24 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   defp build_priority_field_contract(%{"__typename" => "ProjectV2SingleSelectField"} = field, tracker) do
     priority_option_map = normalize_priority_option_map(Map.get(tracker, :priority_option_map))
 
-    cond do
-      priority_option_map == nil or priority_option_map == %{} ->
-        {:error, {:invalid_workflow_config, "tracker.priority_option_map is required for single-select GitHub priority fields"}}
-
-      true ->
-        with {:ok, option_names, option_ids_by_name} <- priority_options(field),
-             :ok <- ensure_priority_option_names(option_names, priority_option_map),
-             :ok <- ensure_priority_option_values(priority_option_map) do
-          {:ok,
-           %{
-             id: field["id"],
-             name: field["name"],
-             type: :single_select,
-             priority_by_option_id:
-               Enum.reduce(priority_option_map, %{}, fn {option_name, priority}, acc ->
-                 Map.put(acc, Map.fetch!(option_ids_by_name, option_name), priority)
-               end),
-             priority_by_option_name: priority_option_map
-           }}
-        end
+    if priority_option_map == nil or priority_option_map == %{} do
+      {:error, {:invalid_workflow_config, "tracker.priority_option_map is required for single-select GitHub priority fields"}}
+    else
+      with {:ok, option_names, option_ids_by_name} <- priority_options(field),
+           :ok <- ensure_priority_option_names(option_names, priority_option_map),
+           :ok <- ensure_priority_option_values(priority_option_map) do
+        {:ok,
+         %{
+           id: field["id"],
+           name: field["name"],
+           type: :single_select,
+           priority_by_option_id:
+             Enum.reduce(priority_option_map, %{}, fn {option_name, priority}, acc ->
+               Map.put(acc, Map.fetch!(option_ids_by_name, option_name), priority)
+             end),
+           priority_by_option_name: priority_option_map
+         }}
+      end
     end
   end
 
@@ -1641,9 +1625,8 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   # Returns `{:ok, blockers}` or `{:error, reason}`.
   defp extract_blockers(issue_content, tracker, contract, request_fun) when is_map(issue_content) do
     with {:ok, blocker_nodes} <- load_blocker_nodes(issue_content, tracker, request_fun),
-         {:ok, blockers} <- normalize_blocker_refs(blocker_nodes),
-         {:ok, resolved_blockers} <- resolve_blocker_states(blockers, tracker, contract, request_fun) do
-      {:ok, resolved_blockers}
+         {:ok, blockers} <- normalize_blocker_refs(blocker_nodes) do
+      resolve_blocker_states(blockers, tracker, contract, request_fun)
     end
   end
 
@@ -1747,8 +1730,14 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   # Normalize one blocker node to a provider-neutral blocker ref.
   #
   # Returns `{:ok, blocker}` or `{:error, reason}`.
-  defp normalize_blocker_ref(%{"id" => blocker_id, "number" => blocker_number, "repository" => %{"nameWithOwner" => repository}, "state" => blocker_state})
-       when is_binary(blocker_id) and is_integer(blocker_number) and is_binary(repository) and is_binary(blocker_state) do
+  defp normalize_blocker_ref(%{
+         "id" => blocker_id,
+         "number" => blocker_number,
+         "repository" => %{"nameWithOwner" => repository},
+         "state" => blocker_state
+       })
+       when is_binary(blocker_id) and is_integer(blocker_number) and
+              is_binary(repository) and is_binary(blocker_state) do
     {:ok,
      %{
        id: blocker_id,
@@ -1781,22 +1770,8 @@ defmodule SymphonyElixir.GitHubProjects.Client do
         |> Enum.reduce(%{}, fn blocker_node, acc -> Map.put(acc, blocker_node["id"], blocker_node) end)
 
       blockers
-      |> Enum.reduce_while({:ok, []}, fn blocker, {:ok, acc} ->
-        case resolve_blocker_state(blocker, Map.get(blocker_nodes_by_id, blocker.id), tracker, contract, request_fun) do
-          {:ok, resolved_blocker} -> {:cont, {:ok, [resolved_blocker | acc]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
-      |> case do
-        {:ok, resolved_blockers} ->
-          {:ok,
-           resolved_blockers
-           |> Enum.reverse()
-           |> Enum.sort_by(fn blocker -> {blocker.identifier, blocker.id} end)}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      |> reduce_resolved_blockers(blocker_nodes_by_id, tracker, contract, request_fun)
+      |> sort_blockers()
     end
   end
 
@@ -1881,7 +1856,9 @@ defmodule SymphonyElixir.GitHubProjects.Client do
         {:ok, project_item} ->
           blocker_status_from_project_item(project_item, contract)
 
-        :not_found when page_info.has_next_page == true and is_binary(page_info.end_cursor) and page_info.end_cursor != "" ->
+        :not_found
+        when page_info.has_next_page == true and is_binary(page_info.end_cursor) and
+               page_info.end_cursor != "" ->
           fetch_blocker_project_items_page(blocker_issue_id, page_info.end_cursor, tracker, contract, request_fun)
 
         :not_found when page_info.has_next_page == true ->
@@ -2181,6 +2158,103 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   end
 
   defp close_reason_for_state(_state_name), do: "NOT_PLANNED"
+
+  defp reopen_issue_for_read?(issue, tracker) do
+    active_issue_state?(issue.state, tracker) and issue.content_state == "CLOSED" and
+      issue.assigned_to_worker
+  end
+
+  defp close_issue_for_read?(issue, tracker) do
+    terminal_issue_state?(issue.state, tracker) and issue.content_state != "CLOSED"
+  end
+
+  defp maybe_reopen_issue_for_read(issue, tracker, request_fun) do
+    case reopen_issue(issue, tracker, request_fun) do
+      {:ok, reopened_issue} ->
+        {:ok, reopened_issue}
+
+      {:error, reason} ->
+        Logger.warning("Skipping issue after reopen failure: issue_id=#{issue.id} identifier=#{issue.identifier} reason=#{inspect(reason)}")
+
+        :skip
+    end
+  end
+
+  defp maybe_close_issue_for_read(issue, tracker, request_fun) do
+    case close_issue(issue, issue.state, tracker, request_fun) do
+      {:ok, closed_issue} ->
+        {:ok, closed_issue}
+
+      {:error, reason} ->
+        Logger.warning("Keeping terminal issue after close failure: issue_id=#{issue.id} identifier=#{issue.identifier} reason=#{inspect(reason)}")
+
+        {:ok, issue}
+    end
+  end
+
+  defp close_issue_for_write?(issue, state_name, tracker) do
+    terminal_issue_state?(state_name, tracker) and issue.content_state != "CLOSED"
+  end
+
+  defp reopen_issue_for_write?(issue, state_name, tracker) do
+    active_issue_state?(state_name, tracker) and issue.content_state == "CLOSED"
+  end
+
+  defp maybe_close_issue_for_write(issue, state_name, tracker, request_fun) do
+    case close_issue(issue, state_name, tracker, request_fun) do
+      {:ok, _issue} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_reopen_issue_for_write(issue, tracker, request_fun) do
+    case reopen_issue(issue, tracker, request_fun) do
+      {:ok, _issue} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp load_issue_state_batches(ids, tracker, contract, assignee_filter, request_fun) do
+    ids
+    |> Enum.chunk_every(@id_batch_size)
+    |> Enum.reduce_while({:ok, []}, fn batch_ids, {:ok, acc_issues} ->
+      case fetch_project_item_batch(batch_ids, tracker, contract, assignee_filter, request_fun) do
+        {:ok, batch_issues} -> {:cont, {:ok, acc_issues ++ batch_issues}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp maybe_include_issue({:ok, %Issue{} = issue}, acc, requested_states) do
+    if include_issue_state?(issue, requested_states), do: [issue | acc], else: acc
+  end
+
+  defp maybe_include_issue(:skip, acc, _requested_states), do: acc
+
+  defp reduce_resolved_blockers(blockers, blocker_nodes_by_id, tracker, contract, request_fun) do
+    blockers
+    |> Enum.reduce_while({:ok, []}, fn blocker, {:ok, acc} ->
+      case resolve_blocker_state(
+             blocker,
+             Map.get(blocker_nodes_by_id, blocker.id),
+             tracker,
+             contract,
+             request_fun
+           ) do
+        {:ok, resolved_blocker} -> {:cont, {:ok, [resolved_blocker | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp sort_blockers({:ok, resolved_blockers}) do
+    {:ok,
+     resolved_blockers
+     |> Enum.reverse()
+     |> Enum.sort_by(fn blocker -> {blocker.identifier, blocker.id} end)}
+  end
+
+  defp sort_blockers({:error, reason}), do: {:error, reason}
 
   # Sort a fetched issue batch back into the original ID request order.
   #

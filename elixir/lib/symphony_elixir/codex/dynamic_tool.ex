@@ -91,24 +91,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp normalize_graphql_arguments(arguments) when is_map(arguments) do
-    case normalize_query(arguments) do
-      {:ok, query} ->
-        case normalize_variables(arguments) do
-          {:ok, variables} ->
-            case normalize_operation_name(arguments) do
-              {:ok, operation_name} ->
-                {:ok, query, variables, operation_name}
-
-              {:error, reason} ->
-                {:error, reason}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, query} <- normalize_query(arguments),
+         {:ok, variables} <- normalize_variables(arguments),
+         {:ok, operation_name} <- normalize_operation_name(arguments) do
+      {:ok, query, variables, operation_name}
     end
   end
 

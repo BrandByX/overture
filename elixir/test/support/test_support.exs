@@ -34,9 +34,8 @@ defmodule SymphonyElixir.TestSupport do
           {:error, {:invalid_workflow_config, "tracker.priority_field_name must not match tracker.status_field_name"}}
 
         true ->
-          with :ok <- validate_state_options(tracker),
-               :ok <- validate_priority_field_contract(tracker) do
-            :ok
+          with :ok <- validate_state_options(tracker) do
+            validate_priority_field_contract(tracker)
           end
       end
     end
@@ -85,27 +84,37 @@ defmodule SymphonyElixir.TestSupport do
       priority_field_name = tracker.priority_field_name
       priority_option_map = tracker.priority_option_map || %{}
 
-      cond do
-        is_nil(priority_field_name) and priority_option_map != %{} ->
-          {:error, {:invalid_workflow_config, "tracker.priority_option_map requires tracker.priority_field_name for github_projects"}}
+      case priority_field_name do
+        nil ->
+          validate_missing_priority_field(priority_option_map)
 
-        is_nil(priority_field_name) ->
-          :ok
+        "Priority" ->
+          validate_numeric_priority_field(priority_option_map)
 
-        priority_field_name == "Priority" and priority_option_map == %{} ->
-          :ok
-
-        priority_field_name == "Priority" ->
-          {:error, {:invalid_workflow_config, "tracker.priority_option_map is only allowed for single-select GitHub priority fields"}}
-
-        priority_field_name == "Priority Select" ->
+        "Priority Select" ->
           validate_priority_select_map(priority_option_map)
 
-        priority_field_name == "Priority Text" ->
+        "Priority Text" ->
           {:error, {:github_projects_priority_field_unsupported, priority_field_name, "ProjectV2Field", "TEXT"}}
 
-        true ->
+        _other ->
           {:error, {:github_projects_priority_field_not_found, priority_field_name}}
+      end
+    end
+
+    defp validate_missing_priority_field(priority_option_map) do
+      if priority_option_map != %{} do
+        {:error, {:invalid_workflow_config, "tracker.priority_option_map requires tracker.priority_field_name for github_projects"}}
+      else
+        :ok
+      end
+    end
+
+    defp validate_numeric_priority_field(priority_option_map) do
+      if priority_option_map == %{} do
+        :ok
+      else
+        {:error, {:invalid_workflow_config, "tracker.priority_option_map is only allowed for single-select GitHub priority fields"}}
       end
     end
 
@@ -116,30 +125,28 @@ defmodule SymphonyElixir.TestSupport do
     #
     # Returns `:ok` or `{:error, reason}`.
     defp validate_priority_select_map(priority_option_map) do
-      cond do
-        priority_option_map == %{} ->
-          {:error, {:invalid_workflow_config, "tracker.priority_option_map is required for single-select GitHub priority fields"}}
+      if priority_option_map == %{} do
+        {:error, {:invalid_workflow_config, "tracker.priority_option_map is required for single-select GitHub priority fields"}}
+      else
+        missing_option_names =
+          priority_option_map
+          |> Map.keys()
+          |> Enum.reject(&(&1 in @fake_priority_select_option_names))
 
-        true ->
-          missing_option_names =
-            priority_option_map
-            |> Map.keys()
-            |> Enum.reject(&(&1 in @fake_priority_select_option_names))
+        invalid_priorities =
+          priority_option_map
+          |> Enum.reject(fn {_option_name, priority} -> is_integer(priority) and priority in 1..4 end)
 
-          invalid_priorities =
-            priority_option_map
-            |> Enum.reject(fn {_option_name, priority} -> is_integer(priority) and priority in 1..4 end)
+        cond do
+          missing_option_names != [] ->
+            {:error, {:github_projects_missing_priority_options, missing_option_names}}
 
-          cond do
-            missing_option_names != [] ->
-              {:error, {:github_projects_missing_priority_options, missing_option_names}}
+          invalid_priorities != [] ->
+            {:error, {:invalid_workflow_config, "tracker.priority_option_map values must be integers in 1..4"}}
 
-            invalid_priorities != [] ->
-              {:error, {:invalid_workflow_config, "tracker.priority_option_map values must be integers in 1..4"}}
-
-            true ->
-              :ok
-          end
+          true ->
+            :ok
+        end
       end
     end
   end

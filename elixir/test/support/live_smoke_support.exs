@@ -620,30 +620,28 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       when is_map(context) and is_map(fixture) and is_integer(priority) do
     priority_field = require_priority_field!(context.bootstrap)
 
-    cond do
-      not is_binary(fixture.item_id) ->
-        raise "Live smoke issue fixture #{fixture.identifier} is not on the sandbox board."
+    if is_binary(fixture.item_id) do
+      item_id = fixture.item_id
 
-      true ->
-        item_id = fixture.item_id
+      response =
+        graphql!(
+          context.tracker,
+          @update_number_field_mutation,
+          %{
+            projectId: context.bootstrap.project_id,
+            itemId: item_id,
+            fieldId: priority_field.id,
+            number: priority * 1.0
+          },
+          operation_name: "OvertureLiveSmokeUpdateNumberField"
+        )
 
-        response =
-          graphql!(
-            context.tracker,
-            @update_number_field_mutation,
-            %{
-              projectId: context.bootstrap.project_id,
-              itemId: item_id,
-              fieldId: priority_field.id,
-              number: priority * 1.0
-            },
-            operation_name: "OvertureLiveSmokeUpdateNumberField"
-          )
-
-        case get_in(response, ["data", "updateProjectV2ItemFieldValue", "projectV2Item", "id"]) do
-          ^item_id -> :ok
-          _ -> raise "Failed to update the live smoke numeric priority field."
-        end
+      case get_in(response, ["data", "updateProjectV2ItemFieldValue", "projectV2Item", "id"]) do
+        ^item_id -> :ok
+        _ -> raise "Failed to update the live smoke numeric priority field."
+      end
+    else
+      raise "Live smoke issue fixture #{fixture.identifier} is not on the sandbox board."
     end
   end
 
@@ -1096,10 +1094,7 @@ defmodule SymphonyElixir.LiveSmokeSupport do
       Enum.split_with(bootstrap.project_issue_items, fn item -> item.state == "OPEN" end)
 
     if open_items != [] do
-      issue_numbers =
-        open_items
-        |> Enum.map(&Integer.to_string(&1.number))
-        |> Enum.join(", ")
+      issue_numbers = Enum.map_join(open_items, ", ", &Integer.to_string(&1.number))
 
       raise "Another live smoke run is already active on the sandbox board (issues: #{issue_numbers})."
     end

@@ -121,50 +121,115 @@ defmodule SymphonyElixir.Config do
     priority_field_name = normalize_optional_string(settings.tracker.priority_field_name)
     priority_option_map = settings.tracker.priority_option_map
 
-    cond do
-      is_nil(settings.tracker.kind) ->
-        {:error, :missing_tracker_kind}
-
-      settings.tracker.kind not in ["github_projects", "memory"] ->
-        {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
-
-      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_github_api_token}
-
-      settings.tracker.kind == "github_projects" and settings.tracker.owner_type not in ["organization", "user"] ->
-        {:error, :invalid_github_owner_type}
-
-      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.owner_login) ->
-        {:error, {:invalid_workflow_config, "tracker.owner_login must be set for github_projects"}}
-
-      settings.tracker.kind == "github_projects" and not is_integer(settings.tracker.project_number) ->
-        {:error, {:invalid_workflow_config, "tracker.project_number must be an integer for github_projects"}}
-
-      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.repository) ->
-        {:error, :invalid_github_repository}
-
-      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.status_field_name) ->
-        {:error, {:invalid_workflow_config, "tracker.status_field_name must be set for github_projects"}}
-
-      settings.tracker.kind == "github_projects" and priority_field_name == settings.tracker.status_field_name ->
-        {:error, {:invalid_workflow_config, "tracker.priority_field_name must not match tracker.status_field_name"}}
-
-      settings.tracker.kind == "github_projects" and is_nil(priority_field_name) and present_map?(priority_option_map) ->
-        {:error, {:invalid_workflow_config, "tracker.priority_option_map requires tracker.priority_field_name for github_projects"}}
-
-      settings.tracker.kind == "github_projects" and normalized_tracker_assignee == "" ->
-        {:error, {:invalid_workflow_config, "tracker.assignee must be an explicit GitHub login for github_projects"}}
-
-      settings.tracker.kind == "github_projects" and normalized_tracker_assignee == "me" ->
-        {:error, {:invalid_workflow_config, "tracker.assignee: me is not supported for github_projects; use an explicit GitHub login"}}
-
-      settings.tracker.kind == "github_projects" and human_review_active?(normalized_active_states) ->
-        {:error, {:invalid_workflow_config, "tracker.active_states must not include Human Review; it is a manual handoff state"}}
-
-      true ->
-        validate_tracker_backend(settings)
+    with :ok <- validate_tracker_kind(settings),
+         :ok <- validate_github_api_key(settings),
+         :ok <- validate_github_owner_type(settings),
+         :ok <- validate_github_owner_login(settings),
+         :ok <- validate_github_project_number(settings),
+         :ok <- validate_github_repository(settings),
+         :ok <- validate_github_status_field_name(settings),
+         :ok <- validate_github_priority_field_name(settings, priority_field_name),
+         :ok <- validate_github_priority_option_map(settings, priority_field_name, priority_option_map),
+         :ok <- validate_github_assignee(settings, normalized_tracker_assignee),
+         :ok <- validate_github_active_states(settings, normalized_active_states) do
+      validate_tracker_backend(settings)
     end
   end
+
+  defp validate_tracker_kind(%{tracker: %{kind: nil}}), do: {:error, :missing_tracker_kind}
+
+  defp validate_tracker_kind(%{tracker: %{kind: kind}})
+       when kind not in ["github_projects", "memory"] do
+    {:error, {:unsupported_tracker_kind, kind}}
+  end
+
+  defp validate_tracker_kind(_settings), do: :ok
+
+  defp validate_github_api_key(%{tracker: %{kind: "github_projects", api_key: api_key}})
+       when not is_binary(api_key) do
+    {:error, :missing_github_api_token}
+  end
+
+  defp validate_github_api_key(_settings), do: :ok
+
+  defp validate_github_owner_type(%{tracker: %{kind: "github_projects", owner_type: owner_type}})
+       when owner_type not in ["organization", "user"] do
+    {:error, :invalid_github_owner_type}
+  end
+
+  defp validate_github_owner_type(_settings), do: :ok
+
+  defp validate_github_owner_login(%{tracker: %{kind: "github_projects", owner_login: owner_login}})
+       when not is_binary(owner_login) do
+    {:error, {:invalid_workflow_config, "tracker.owner_login must be set for github_projects"}}
+  end
+
+  defp validate_github_owner_login(_settings), do: :ok
+
+  defp validate_github_project_number(%{tracker: %{kind: "github_projects", project_number: project_number}})
+       when not is_integer(project_number) do
+    {:error, {:invalid_workflow_config, "tracker.project_number must be an integer for github_projects"}}
+  end
+
+  defp validate_github_project_number(_settings), do: :ok
+
+  defp validate_github_repository(%{tracker: %{kind: "github_projects", repository: repository}})
+       when not is_binary(repository) do
+    {:error, :invalid_github_repository}
+  end
+
+  defp validate_github_repository(_settings), do: :ok
+
+  defp validate_github_status_field_name(%{tracker: %{kind: "github_projects", status_field_name: status_field_name}})
+       when not is_binary(status_field_name) do
+    {:error, {:invalid_workflow_config, "tracker.status_field_name must be set for github_projects"}}
+  end
+
+  defp validate_github_status_field_name(_settings), do: :ok
+
+  defp validate_github_priority_field_name(
+         %{tracker: %{kind: "github_projects", status_field_name: status_field_name}},
+         priority_field_name
+       )
+       when priority_field_name == status_field_name do
+    {:error, {:invalid_workflow_config, "tracker.priority_field_name must not match tracker.status_field_name"}}
+  end
+
+  defp validate_github_priority_field_name(_settings, _priority_field_name), do: :ok
+
+  defp validate_github_priority_option_map(
+         %{tracker: %{kind: "github_projects"}},
+         nil,
+         priority_option_map
+       ) do
+    if present_map?(priority_option_map) do
+      {:error, {:invalid_workflow_config, "tracker.priority_option_map requires tracker.priority_field_name for github_projects"}}
+    else
+      :ok
+    end
+  end
+
+  defp validate_github_priority_option_map(_settings, _priority_field_name, _priority_option_map), do: :ok
+
+  defp validate_github_assignee(%{tracker: %{kind: "github_projects"}}, "") do
+    {:error, {:invalid_workflow_config, "tracker.assignee must be an explicit GitHub login for github_projects"}}
+  end
+
+  defp validate_github_assignee(%{tracker: %{kind: "github_projects"}}, "me") do
+    {:error, {:invalid_workflow_config, "tracker.assignee: me is not supported for github_projects; use an explicit GitHub login"}}
+  end
+
+  defp validate_github_assignee(_settings, _normalized_tracker_assignee), do: :ok
+
+  defp validate_github_active_states(%{tracker: %{kind: "github_projects"}}, normalized_active_states) do
+    if human_review_active?(normalized_active_states) do
+      {:error, {:invalid_workflow_config, "tracker.active_states must not include Human Review; it is a manual handoff state"}}
+    else
+      :ok
+    end
+  end
+
+  defp validate_github_active_states(_settings, _normalized_active_states), do: :ok
 
   defp validate_tracker_backend(%{tracker: %{kind: "memory"}}), do: :ok
 

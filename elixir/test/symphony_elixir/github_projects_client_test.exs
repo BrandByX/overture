@@ -415,6 +415,90 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
     assert reopen_payload["variables"][:contentId] == "issue-node-2"
   end
 
+  test "fetch_issue_states_by_ids skips active issues when reopen-on-read fails" do
+    tracker = %{Config.settings!().tracker | assignee: "sidney"}
+
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
+
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: project_contract_response()}}
+
+        "OvertureProjectItemsById" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_item_batch_response([
+                 issue_item("project-item-2", "Todo",
+                   issue:
+                     issue_node("issue-node-2", 302,
+                       assignees: ["sidney"],
+                       state: "CLOSED",
+                       state_reason: "COMPLETED"
+                     )
+                 )
+               ])
+           }}
+
+        "OvertureReopenIssue" ->
+          {:error, :reopen_failed}
+      end
+    end
+
+    assert {:ok, []} =
+             Client.fetch_issue_states_by_ids_for_test(
+               tracker,
+               ["project-item-2"],
+               request_fun
+             )
+
+    assert_received {:github_request, "OvertureReopenIssue", reopen_payload}
+    assert reopen_payload["variables"][:contentId] == "issue-node-2"
+  end
+
+  test "fetch_issue_states_by_ids keeps terminal issues when close-on-read fails" do
+    tracker = %{Config.settings!().tracker | assignee: "sidney"}
+
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
+
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: project_contract_response()}}
+
+        "OvertureProjectItemsById" ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               project_item_batch_response([
+                 issue_item("project-item-1", "Done", issue: issue_node("issue-node-1", 301, assignees: ["sidney"], state: "OPEN"))
+               ])
+           }}
+
+        "OvertureCloseIssue" ->
+          {:error, :close_failed}
+      end
+    end
+
+    assert {:ok, [%Issue{} = issue]} =
+             Client.fetch_issue_states_by_ids_for_test(
+               tracker,
+               ["project-item-1"],
+               request_fun
+             )
+
+    assert issue.id == "project-item-1"
+    assert issue.content_state == "OPEN"
+    assert issue.content_state_reason == nil
+
+    assert_received {:github_request, "OvertureCloseIssue", close_payload}
+    assert close_payload["variables"][:contentId] == "issue-node-1"
+    assert close_payload["variables"][:stateReason] == "COMPLETED"
+  end
+
   test "create_comment uses the linked issue content id and tracker auth contract" do
     tracker = Config.settings!().tracker
     issue = %Issue{id: "project-item-1", content_id: "issue-node-1", identifier: "BrandByX/overture#401"}
@@ -476,7 +560,7 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
   end
 
   test "update_issue_state reopens closed issues when moving into an active workflow state" do
-    tracker = Config.settings!().tracker
+    tracker = %{Config.settings!().tracker | active_states: Config.settings!().tracker.active_states ++ ["Rework"]}
 
     issue = %Issue{
       id: "project-item-rework",
@@ -506,6 +590,73 @@ defmodule SymphonyElixir.GitHubProjectsClientTest do
 
     assert_received {:github_request, "OvertureUpdateProjectState", update_payload}
     assert update_payload["variables"][:optionId] == "option-rework"
+    assert_received {:github_request, "OvertureReopenIssue", reopen_payload}
+    assert reopen_payload["variables"][:contentId] == "issue-node-rework"
+  end
+
+  test "update_issue_state returns an error when close-on-write fails" do
+    tracker = Config.settings!().tracker
+
+    issue = %Issue{
+      id: "project-item-dup",
+      content_id: "issue-node-dup",
+      identifier: "BrandByX/overture#501",
+      state: "In Progress",
+      content_state: "OPEN"
+    }
+
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
+
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: project_contract_response()}}
+
+        "OvertureUpdateProjectState" ->
+          {:ok, %{status: 200, body: update_state_response("project-item-dup")}}
+
+        "OvertureCloseIssue" ->
+          {:error, :close_failed}
+      end
+    end
+
+    assert {:error, {:github_api_request, :close_failed}} =
+             Client.update_issue_state_for_test(issue, "Duplicate", tracker, request_fun)
+
+    assert_received {:github_request, "OvertureCloseIssue", close_payload}
+    assert close_payload["variables"][:contentId] == "issue-node-dup"
+  end
+
+  test "update_issue_state returns an error when reopen-on-write fails" do
+    tracker = %{Config.settings!().tracker | active_states: Config.settings!().tracker.active_states ++ ["Rework"]}
+
+    issue = %Issue{
+      id: "project-item-rework",
+      content_id: "issue-node-rework",
+      identifier: "BrandByX/overture#601",
+      state: "Done",
+      content_state: "CLOSED",
+      content_state_reason: "COMPLETED"
+    }
+
+    request_fun = fn payload, _headers ->
+      send(self(), {:github_request, payload["operationName"], payload})
+
+      case payload["operationName"] do
+        "OvertureProjectFieldContract" ->
+          {:ok, %{status: 200, body: project_contract_response()}}
+
+        "OvertureUpdateProjectState" ->
+          {:ok, %{status: 200, body: update_state_response("project-item-rework")}}
+
+        "OvertureReopenIssue" ->
+          {:error, :reopen_failed}
+      end
+    end
+
+    assert {:error, {:github_api_request, :reopen_failed}} =
+             Client.update_issue_state_for_test(issue, "Rework", tracker, request_fun)
+
     assert_received {:github_request, "OvertureReopenIssue", reopen_payload}
     assert reopen_payload["variables"][:contentId] == "issue-node-rework"
   end
